@@ -264,9 +264,18 @@ async function mount(ctx) {
       login.append(imgBox);
       const row = el("div", void 0, "bl-login-row");
       const btn = el("button", "\u83B7\u53D6\u4E8C\u7EF4\u7801", "bl-btn");
+      const importBtn = el("button", "\u4ECE\u793E\u4EA4\u89C6\u7A97\u5BFC\u5165\u767B\u5F55", "bl-btn");
       const status = el("span", "");
-      row.append(btn, status);
+      row.append(btn, importBtn, status);
       login.append(row);
+      importBtn.addEventListener("click", () => {
+        importBtn.setAttribute("disabled", "true");
+        status.textContent = "\u6B63\u5728\u5BFC\u5165\u2026";
+        void ctx.invoke("import-login").then((r) => {
+          status.textContent = r?.ok ? r.note ?? "\u5DF2\u5BFC\u5165" : `\u6CA1\u5BFC\u5165\uFF1A${r?.error ?? "\u672A\u77E5\u9519\u8BEF"}`;
+          if (r?.ok) setTimeout(() => void load(), 600);
+        }).finally(() => importBtn.removeAttribute("disabled"));
+      });
       let pollTimer = null;
       btn.addEventListener("click", () => {
         btn.setAttribute("disabled", "true");

@@ -313,9 +313,25 @@ export async function mount(ctx: WebUiPanelContext): Promise<void> {
       login.append(imgBox);
       const row = el('div', undefined, 'bl-login-row');
       const btn = el('button', '获取二维码', 'bl-btn');
+      const importBtn = el('button', '从社交视窗导入登录', 'bl-btn');
       const status = el('span', '');
-      row.append(btn, status);
+      row.append(btn, importBtn, status);
       login.append(row);
+
+      // 已经用过社交视窗的人不用重新扫码
+      importBtn.addEventListener('click', () => {
+        importBtn.setAttribute('disabled', 'true');
+        status.textContent = '正在导入…';
+        void ctx
+          .invoke<any>('import-login')
+          .then((r) => {
+            status.textContent = r?.ok
+              ? (r.note ?? '已导入')
+              : `没导入：${r?.error ?? '未知错误'}`;
+            if (r?.ok) setTimeout(() => void load(), 600);
+          })
+          .finally(() => importBtn.removeAttribute('disabled'));
+      });
 
       let pollTimer: ReturnType<typeof setInterval> | null = null;
       btn.addEventListener('click', () => {

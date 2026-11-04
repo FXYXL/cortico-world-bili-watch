@@ -1,6 +1,6 @@
 import { focusConfig } from '../config.ts';
 import type { SocialMediaConfigSection } from '../config.ts';
-import type { Account, PublicVideo, SocialPlatform, InboxItem } from '../core/legacy-platform.ts';
+import type { Account, PublicVideo, SocialPlatform, InboxItem } from '../core/platform.ts';
 import type { SocialStore } from './store.ts';
 import { assessPublicInput } from './safety.ts';
 export interface Contact {

@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 
 import { existsSync, lstatSync, statSync, realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { SendRecord, CommentTarget } from '../core/legacy-platform.ts';
+import type { SendRecord, CommentTarget } from '../core/platform.ts';
 export class SendArchive {
   private parent: string;
   constructor(private file: string) {

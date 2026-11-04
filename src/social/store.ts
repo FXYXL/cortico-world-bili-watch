@@ -21,7 +21,7 @@ import type {
   PublicComment,
   ConversationBrief,
   Video,
-} from '../core/legacy-platform.ts';
+} from '../core/platform.ts';
 
 import type { FocusBinding, FocusWork, FocusCheck, Contact } from './focus.ts';
 interface State {

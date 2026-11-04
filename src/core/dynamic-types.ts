@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { FocusMention } from './legacy-platform.ts';
+import type { FocusMention } from './platform.ts';
 import { SocialStore } from '../social/store.ts';
 export interface DynamicPost {
   autonomous?: boolean;

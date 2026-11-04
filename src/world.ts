@@ -29,7 +29,7 @@ import type { WorldContext } from 'cortico/world.ts';
 import { BILI_WATCH_DEFAULTS, BILI_WATCH_ID, type BiliWatchConfig } from './config.ts';
 import { BILI_WATCH_CONFIG_GROUP } from './config-group.ts';
 import { BILI_WATCH_TOOL_DECLS } from './tools.ts';
-import { BiliClient, cookieField } from './core/client.ts';
+import { BiliClient, cleanCookie, cookieField } from './core/client.ts';
 // **不要静态 import 浏览器层**：它依赖 playwright-core，没装时会让整个插件加载失败。
 // 改成用到时才 import（见 browser()）。
 import type { BilibiliBrowserSender } from './core/browser.ts';
@@ -1442,6 +1442,11 @@ export class BiliWatchWorld implements World {
           secret: cfg.cookieSecret,
           hasCookie: Boolean(this.cookie()),
           account: this.service.currentAccount,
+          note: this.cookie()
+            ? this.service.currentAccount
+              ? `已登录并核验：${this.service.currentAccount.name}`
+              : '有 cookie，但还没核验过账号（调用一次需要登录的工具，或读动态/发评时会自动核验）'
+            : '未登录。用面板的「获取二维码」扫码，或把「登录来源」指到已有的环境变量。',
         },
         monitor: cfg.monitor,
         posting: {
@@ -1535,7 +1540,7 @@ export class BiliWatchWorld implements World {
    * 前端只摆数据、不做判断 —— 谁是待回应、哪条已发出，全在这里算。
    * 这样"界面上看到的"和"实际记录的"永远一致。
    */
-  private panelInvoke(method: string, args: unknown[]): unknown {
+  private async panelInvoke(method: string, args: unknown[]): Promise<unknown> {
     const cfg = this.cfg();
     const roaming = this.roaming.status();
     const acc = this.service.currentAccount;
@@ -1577,12 +1582,13 @@ export class BiliWatchWorld implements World {
       case 'status':
         return { usage, state, roaming };
       case 'check-login': {
-        // 前端点「核验登录」时跑一次真实请求
-        this.service
-          .connect()
-          .then(() => undefined)
-          .catch(() => undefined);
-        return { started: true, note: '正在核验，几秒后刷新看结果。' };
+        // **等它出结果**再返回：前端点一下就该看到结论，而不是"几秒后自己刷"
+        try {
+          const acc = await this.service.connect();
+          return { ok: true, account: acc.name, id: acc.id };
+        } catch (e) {
+          return { ok: false, error: (e as Error).message };
+        }
       }
       case 'qr-start': {
         // 生成二维码。**返回 data URL**，前端直接 <img src> 显示，不需要额外路由。
@@ -1591,6 +1597,34 @@ export class BiliWatchWorld implements World {
       case 'qr-poll': {
         const key = String(args[0] ?? '');
         return this.qrPoll(key).catch((e) => ({ error: (e as Error).message }));
+      }
+      case 'import-login': {
+        /**
+         * 从社交视窗的 secret 导入登录，存进**自己的** secret。
+         *
+         * 存在的理由：很多人先装了社交视窗（扫码过一次），再装这个。
+         * 直接读别人的 secret 能用，但那是"借钥匙" ——
+         * 对方卸载后没人维护，主人也不知道登录状态归谁管。
+         *
+         * 导入之后就是自己的了，可以放心卸载社交视窗。
+         */
+        const legacy = this.secret('SOCIALMEDIA_BILIBILI_COOKIE');
+        if (!legacy) return { ok: false, error: '没找到社交视窗存下的登录（那个环境变量是空的）。' };
+        if (!this.cfg().cookieSecret) {
+          return { ok: false, error: '请先把「登录来源」填成 BILI_WATCH_COOKIE，再点导入。' };
+        }
+        try {
+          cleanCookie(legacy); // 先验一下，坏数据不写进新位置
+        } catch (e) {
+          return { ok: false, error: `旧登录不可用：${(e as Error).message}` };
+        }
+        try {
+          this.ctx.storeSecret(this.cfg().cookieSecret, legacy);
+          this.service.disconnect();
+          return { ok: true, note: '已导入。之后可以放心卸载社交视窗。' };
+        } catch (e) {
+          return { ok: false, error: (e as Error).message };
+        }
       }
       case 'logout': {
         try {
@@ -1700,7 +1734,7 @@ export class BiliWatchWorld implements World {
       ],
       invoke: (async (panel: string, method: string, args: unknown[]) => {
         if (panel !== 'desk') throw new Error('面板不存在');
-        return this.panelInvoke(method, args ?? []);
+        return await this.panelInvoke(method, args ?? []);
       }) as WorldWebUiDecl['invoke'],
       storage: [
         {
