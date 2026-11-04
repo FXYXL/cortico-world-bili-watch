@@ -1324,8 +1324,8 @@ export class BiliWatchWorld implements World {
           stat: () => {
             const s = this.store;
             return en
-              ? `${s.outbox().length} sends · ${s.roamCountToday()} roams today · ${pending} pending`
-              : `${s.outbox().length} 条发送 · 今日 ${s.roamCountToday()} 轮闲逛 · ${pending} 条待回应`;
+              ? `${s.outbox().length} sends · ${roaming.usedToday} roams today · ${pending} pending`
+              : `${s.outbox().length} 条发送 · 今日 ${roaming.usedToday} 轮闲逛 · ${pending} 条待回应`;
           },
           clear: async () => {
             rmSync(join(dirs.state, 'state.json'), { force: true });
