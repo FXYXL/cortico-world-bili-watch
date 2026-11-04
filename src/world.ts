@@ -404,7 +404,15 @@ export class BiliWatchWorld implements World {
 
       return {
         text: formatBiliProbe({
-          meta: { ...meta, bvid: meta.id, part: 1, partDuration: meta.durationSec, parts: meta.parts },
+          meta: {
+            ...meta,
+            bvid: meta.id,
+            part: this.partOf(meta),
+            partDuration: this.partDurationOf(meta),
+            duration: meta.durationSec,
+            // formatBiliProbe 要的是旧形状：parts 里成员的时长叫 duration
+            parts: meta.parts.map((p) => ({ ...p, duration: p.durationSec })),
+          },
           play,
           subtitle,
           loggedIn: this.client.loggedIn,
@@ -718,6 +726,11 @@ export class BiliWatchWorld implements World {
     const dirs = worldDirs(this.ctx.dataDir);
     const state = readUsage(dirs.state);
     writeUsage(dirs.state, { ...state, deliveredBytes: state.deliveredBytes + bytes, day: todayKey(this.ctx.timezone) });
+  }
+
+  /** 当前分P的时长。**不是整支视频的时长** —— 分P视频这两者差很多。 */
+  private partDurationOf(meta: { parts: Array<{ cid: string; durationSec: number }>; cid: string; durationSec: number }): number {
+    return meta.parts.find((p) => p.cid === meta.cid)?.durationSec ?? meta.durationSec;
   }
 
   private partOf(meta: { parts: Array<{ cid: string; page: number }>; cid: string }): number {

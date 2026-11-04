@@ -109,7 +109,8 @@ async function resolveBilibili(o: ResolveOptions, raw: string): Promise<Prepared
   const meta = await getVideo(client, raw, o.part, o.signal);
   const play = await getPlayInfo(client, meta, height, o.signal);
 
-  const identity = `bilibili:${meta.bvid}:p${meta.part}`;
+  const partNo = meta.parts.find((p) => p.cid === meta.cid)?.page ?? 1;
+  const identity = `bilibili:${meta.id}:p${partNo}`;
   const key = engine.mediaKey(`${identity}@${height}`, height);
   const dir = join(engine.mediaDir(), key);
   const localPath = join(dir, 'video.mp4');
@@ -176,7 +177,7 @@ async function resolveBilibili(o: ResolveOptions, raw: string): Promise<Prepared
     /* 淘汰失败不该让这次读取失败 */
   }
 
-  const { file, note } = await ensureTranscript(o, meta, localPath);
+  const { file, note } = await ensureTranscript(o, meta, localPath, partNo);
 
   const frameSource = o.wantFrameSource
     ? await getFrameSource(client, meta, o.frameHeight, o.signal)
@@ -185,7 +186,7 @@ async function resolveBilibili(o: ResolveOptions, raw: string): Promise<Prepared
   return {
     kind: 'bilibili',
     identity,
-    title: meta.title || `${meta.bvid} p${meta.part}`,
+    title: meta.title || `${meta.id} p${partNo}`,
     localPath,
     meta,
     play,
@@ -203,6 +204,7 @@ async function ensureTranscript(
   o: ResolveOptions,
   meta: BiliMeta,
   localPath: string,
+  partNo: number,
 ): Promise<{ file: string | null; note: string }> {
   if (o.transcriptFile) {
     return existsSync(o.transcriptFile)
@@ -210,7 +212,7 @@ async function ensureTranscript(
       : { file: null, note: `指定的转写文件不存在：${o.transcriptFile}` };
   }
   const dir = transcriptDir(o.dataDir);
-  const file = join(dir, `${meta.bvid}-p${meta.part}.json`);
+  const file = join(dir, `${meta.id}-p${partNo}.json`);
   if (existsSync(file) && statSync(file).size > 8) {
     return { file, note: '字幕来自 B站字幕轨（已缓存）。' };
   }
@@ -219,7 +221,7 @@ async function ensureTranscript(
     info = await getSubtitles(o.client, meta, o.signal);
   } catch (error) {
     // 字幕接口挂了不代表没有台词：还有 ASR 这条路。
-    return await ensureAfterSubtitleMiss(o, meta, localPath, `字幕接口未响应：${(error as Error).message}`);
+    return await ensureAfterSubtitleMiss(o, meta, localPath, partNo, `字幕接口未响应：${(error as Error).message}`);
   }
   if (!info.available || !info.raw) {
     // **没有字幕轨 → 退回 ASR**。这是 P1 补的那条路：
@@ -229,7 +231,7 @@ async function ensureTranscript(
     // 它的 note 才是"为什么没有台词"的权威说明 —— 外面再包一层
     // `没有字幕：${info.reason}` 会把"跑了识别但没听到人话"抹成"没有字幕"，
     // 正是那种"结果说不清为什么、用户以为是插件坏了"的毛病。
-    return await ensureAfterSubtitleMiss(o, meta, localPath, info.reason);
+    return await ensureAfterSubtitleMiss(o, meta, localPath, partNo, info.reason);
   }
   try {
     mkdirSync(dir, { recursive: true });
@@ -260,6 +262,7 @@ async function ensureAfterSubtitleMiss(
   o: ResolveOptions,
   meta: BiliMeta,
   localPath: string,
+  partNo: number,
   siteReason = '',
 ): Promise<{ file: string | null; note: string }> {
   const cfg = o.asr;
@@ -280,7 +283,7 @@ async function ensureAfterSubtitleMiss(
   }
 
   const dir = transcriptDir(o.dataDir);
-  const file = join(dir, `asr-${meta.bvid}-p${meta.part}.json`);
+  const file = join(dir, `asr-${meta.id}-p${partNo}.json`);
   if (existsSync(file) && statSync(file).size > 8) {
     try {
       const cached = JSON.parse(readFileSync(file, 'utf8')) as { segments?: TranscriptSegment[]; engine?: string };
