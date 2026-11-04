@@ -583,6 +583,30 @@ const socialTools = [
     },
   },
   {
+    name: 'bili_dm',
+    tags: ['read', 'write'],
+    description: [
+      'Bilibili direct messages. action=list shows conversations with unread counts (system',
+      'notices are marked - **never reply to those**); action=read shows one conversation;',
+      'action=send replies to a real person.',
+      '',
+      'New DMs arrive as bili.dm events. DM is a private channel: no public-voice rules, no',
+      'comment interval - but there IS a daily send cap, and 1:1 courtesy still applies:',
+      'reply to what was asked, do not mass-message, do not chase no-replies.',
+    ].join('\n'),
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: { type: 'string', enum: ['list', 'read', 'send'] },
+        talkerId: { type: 'string', maxLength: 20, description: 'Numeric UID of the conversation partner.' },
+        text: { type: 'string', maxLength: 300, description: 'For send: the message body (max 300 chars).' },
+        size: { type: 'integer', minimum: 1, maximum: 50, description: 'For read: how many messages (default 20).' },
+      },
+      required: ['action'],
+    },
+  },
+  {
     name: 'bili_status',
     tags: ['read', 'snapshot'],
     description:
@@ -649,6 +673,7 @@ export const TOOL_SUMMARY: Record<string, { zh: string; en: string }> = {
   bili_publish: { zh: '发评论（四层防重 + 可见性核验）。', en: 'Publishes a comment with idempotency and visibility checks.' },
   bili_inbox: { zh: '处理通知待办与发送回执。', en: 'Handles notifications and send receipts.' },
   bili_roam: { zh: '闲逛的限额、开始、结束。', en: 'Roaming limits, begin and finish.' },
+  bili_dm: { zh: 'B站私信：看会话、读对话、回一条。', en: 'Bilibili DMs: list, read, reply.' },
   bili_focus: { zh: '读特别关注账号的近期作品。', en: 'Reads the focus account and its recent works.' },
   bili_dynamic: { zh: '读/发 B 站动态。', en: 'Reads or publishes Bilibili dynamics.' },
   bili_status: { zh: '读连接状态与三本额度账。', en: 'Reads connection state and the three ledgers.' },
@@ -673,6 +698,13 @@ export const EVENT_TYPES = [
     description: {
       zh: '给了一个可放弃的主动发动态机会，带 offerId。',
       en: 'A skippable autonomous dynamic opportunity with an offer id.',
+    },
+  },
+  {
+    type: 'bili.dm',
+    description: {
+      zh: '收到 B 站私信（真人；系统通知不推）。先读对话再决定回不回。',
+      en: 'A Bilibili direct message from a real person; system notices are not pushed.',
     },
   },
   {

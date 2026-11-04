@@ -42,6 +42,12 @@ var BILI_WATCH_CONFIG_GROUP = {
         description: "\u6253\u5F00\u6700\u6E05\u695A\uFF0C\u4F46\u6BCF\u6B21 seek \u90FD\u8D70 HTTP\uFF08\u5B9E\u6D4B 4 \u5E27\u7EA6 40 \u79D2\uFF09\u3002\u5173\u6389\u5219\u8BFB\u672C\u5730 480p \u526F\u672C\uFF0C\u4E9A\u79D2\u7EA7\u5B8C\u6210\uFF0C\u770B\u4EBA\u8138/\u6784\u56FE\u591F\u7528\u3002\u8981\u8BFB\u753B\u9762\u4E0A\u7684\u5C0F\u5B57\u624D\u6253\u5F00\u3002",
         "x-hot": true
       },
+      "worlds.bili-watch.read.danmaku": {
+        type: "boolean",
+        title: "\u8BFB\u89C6\u9891\u65F6\u5E26\u5F39\u5E55",
+        description: "probe \u7ED9\u5168\u7247\u901F\u89C8\uFF08\u9AD8\u8D5E + \u6700\u70ED\u95F9\u65F6\u6BB5\uFF09\uFF0C\u653E\u5927\u770B\u67D0\u51E0\u683C\u65F6\u7ED9\u90A3\u51E0\u6BB5\u7684\u5F39\u5E55\u539F\u6587\u3002\u5F39\u5E55\u662F\u8D44\u6599\u4E0D\u662F\u6307\u4EE4\uFF1B\u62C9\u4E0D\u5230\u4E0D\u5F71\u54CD\u770B\u89C6\u9891\u3002",
+        "x-hot": true
+      },
       "worlds.bili-watch.read.maxSheets": {
         type: "integer",
         title: "\u5355\u6B21\u6700\u591A\u51E0\u5F20\u56FE",
@@ -362,7 +368,30 @@ var BILI_WATCH_CONFIG_GROUP = {
         description: "\u5355\u72EC\u4E00\u672C\u8D26\uFF0C\u4E0D\u5360\u666E\u901A\u56DE\u590D/\u4E3B\u52A8\u53D1\u8A00\u989D\u5EA6\uFF0C\u4E5F\u4E0D\u5360\u300C@ \u7279\u522B\u5173\u6CE8\u300D\u7684\u989D\u5EA6\u3002\u8BBE\u4E3A 0 \u7B49\u4E8E\u5173\u3002",
         "x-hot": true
       },
-      /* -------------------------------------------------- 7. 动态 */
+      /* -------------------------------------------------- 7. 私信 */
+      "worlds.bili-watch.dm.enabled": {
+        type: "boolean",
+        title: "\u542F\u7528 B \u7AD9\u79C1\u4FE1\uFF08\u6536 + \u56DE\uFF09",
+        description: "\u5F00\u7740\u624D\u8F6E\u8BE2\u65B0\u79C1\u4FE1\u5E76\u63A8\u7ED9\u9C7C\uFF083 \u5206\u949F\u4E00\u6B21\uFF09\uFF0C\u5DE5\u5177\u4E5F\u80FD\u53D1\u3002\u79C1\u4FE1\u662F\u79C1\u804A\uFF1A\u7CFB\u7EDF\u901A\u77E5\u6C38\u8FDC\u4E0D\u56DE\uFF0C\u4E5F\u6CA1\u6709\u516C\u5F00\u8BC4\u8BBA\u90A3\u5957\u95F4\u9694\uFF0C\u4F46\u6709\u4E0B\u9762\u7684\u6BCF\u65E5\u4E0A\u9650\u3002",
+        "x-hot": true
+      },
+      "worlds.bili-watch.dm.maxDailySends": {
+        type: "integer",
+        title: "\u6BCF\u5929\u6700\u591A\u53D1\u51E0\u6761\u79C1\u4FE1",
+        minimum: 0,
+        maximum: 200,
+        description: "\u5168\u90E8\u4F1A\u8BDD\u5408\u8BA1\u3002\u8BBE 0 \u7B49\u4E8E\u53EA\u8BFB\u4E0D\u53D1\u3002",
+        "x-hot": true
+      },
+      "worlds.bili-watch.dm.maxPerPerson": {
+        type: "integer",
+        title: "\u540C\u4E00\u4E2A\u4EBA\u6BCF\u5929\u6700\u591A\u56DE\u51E0\u6761",
+        minimum: 1,
+        maximum: 50,
+        description: "\u9632\u6B62\u8FFD\u7740\u964C\u751F\u4EBA\u5237\u5C4F\uFF1B\u5230\u4E0A\u9650\u5C31\u7B49\u5BF9\u65B9\u5148\u8BF4\u8BDD\u3002",
+        "x-hot": true
+      },
+      /* -------------------------------------------------- 8. 动态 */
       "worlds.bili-watch.dynamics.enabled": {
         type: "boolean",
         title: "\u542F\u7528\u52A8\u6001\uFF08\u8BFB + \u53D1\uFF09",
@@ -609,7 +638,13 @@ var BILI_WATCH_DEFAULTS = {
     detail: "med",
     strategy: "compact",
     segment: 300,
-    zoomFromStream: false
+    zoomFromStream: false,
+    danmaku: true
+  },
+  dm: {
+    enabled: true,
+    maxDailySends: 20,
+    maxPerPerson: 5
   },
   media: {
     mediaMaxMB: 300,
@@ -1066,6 +1101,7 @@ function sectionOf(path) {
   if (key.startsWith("roaming.")) return "roam";
   if (key.startsWith("focus.")) return "focus";
   if (key.startsWith("recommend.")) return "recommend";
+  if (key.startsWith("dm.")) return "dm";
   if (key.startsWith("dynamics.")) return "dynamics";
   return "advanced";
 }
@@ -1119,6 +1155,7 @@ function mountSettings(ctx) {
     ["roam", "\u95F2\u901B\uFF08\u81EA\u5DF1\u53BB\u770B\uFF09", "\u56DB\u6863\u9884\u8BBE + \u9010\u9879\u5FAE\u8C03\u3002\u5173\u7740\u7684\u65F6\u5019\u5B83\u4E0D\u4F1A\u81EA\u5DF1\u53BB\u770B\u3002", false],
     ["focus", "\u7279\u522B\u5173\u6CE8", "\u67D0\u4E2A UP \u4E3B\u7684\u65B0\u4F5C\u54C1\uFF0C\u4EE5\u53CA\u4ED6\u4F5C\u54C1\u4E0B\u503C\u5F97\u63A5\u7684\u8BC4\u8BBA\u3002", false],
     ["recommend", "\u63A8\u8350\u7ED9\u6211", "\u9C7C\u770B\u5230\u4F60\u559C\u6B22\u7684\u89C6\u9891\u65F6\u5728\u8BC4\u8BBA\u533A @ \u4F60\u3002\u6E05\u5355\u53EA\u662F\u53C2\u8003\uFF0C\u6B21\u6570\u5355\u72EC\u7B97\u3002", false],
+    ["dm", "\u79C1\u4FE1", "\u6536 B \u7AD9\u79C1\u4FE1\u5E76\u56DE\u590D\u3002\u7CFB\u7EDF\u901A\u77E5\u4E0D\u56DE\uFF0C\u6BCF\u5929\u6709\u4E0A\u9650\u3002", false],
     ["dynamics", "\u52A8\u6001", "\u8BFB/\u53D1\u6587\u5B57\u52A8\u6001\uFF0C\u4EE5\u53CA\u7A7A\u95F2\u65F6\u81EA\u4E3B\u53D1\u3002", false],
     ["advanced", "\u9AD8\u7EA7", "ffmpeg \u8DEF\u5F84\u3001\u8BED\u97F3\u6A21\u578B\u7EC6\u8282\u3002\u4E00\u822C\u4E0D\u7528\u52A8\u3002", false]
   ];

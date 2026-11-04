@@ -53,6 +53,10 @@ B站伴侣（bili-watch）负责**看 B 站视频**和**在 B 站上和别人说
 - **`bili.dynamic`**：可放弃的主动发动态机会（带 `offerId`）。
   愿意发就用 `bili_dynamic({ action: "prepare", text, offerId })` → 核对草稿 → `publish`。
   **没有 offerId 的发动态会被拒**；没有想说的就不发。
+- **`bili.dm`**：收到 B 站私信（真人；系统通知不会推给你）。
+  先 `bili_dm({ action: "read", talkerId })` 看对话再决定回不回，回就 `action: "send"`（≤300 字）。
+  这是私聊：正常说话，没有公开评论那套限制，但**有每天发送上限**，
+  对方没回音就不要追问；收到私信时应该放下手里的闲逛先看人。
 
 ## 闲逛（自主去看）
 

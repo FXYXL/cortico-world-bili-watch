@@ -232,6 +232,18 @@ export interface BiliWatchConfig {
     segment: number;
     /** 放大重看是否回原始流取高清帧（慢但更清楚）。 */
     zoomFromStream: boolean;
+    /** 读视频时带弹幕（probe 速览 / zoom 该段原文）。 */
+    danmaku: boolean;
+  };
+
+  /** B 站私信 */
+  dm: {
+    /** 开关：关掉就不轮询、工具也会拒发。 */
+    enabled: boolean;
+    /** 每天最多发几条（全部会话合计）。 */
+    maxDailySends: number;
+    /** 同一个人每天最多回几条。 */
+    maxPerPerson: number;
   };
 
   /** 媒体与额度 */
@@ -339,6 +351,13 @@ export const BILI_WATCH_DEFAULTS: BiliWatchConfig = {
     strategy: 'compact',
     segment: 300,
     zoomFromStream: false,
+    danmaku: true,
+  },
+
+  dm: {
+    enabled: true,
+    maxDailySends: 20,
+    maxPerPerson: 5,
   },
 
   media: {

@@ -539,6 +539,7 @@ function sectionOf(path: string): string {
   if (key.startsWith('roaming.')) return 'roam';
   if (key.startsWith('focus.')) return 'focus';
   if (key.startsWith('recommend.')) return 'recommend';
+  if (key.startsWith('dm.')) return 'dm';
   if (key.startsWith('dynamics.')) return 'dynamics';
   return 'advanced';
 }
@@ -609,6 +610,7 @@ export function mountSettings(ctx: WebUiPanelContext): void {
     ['roam', '闲逛（自己去看）', '四档预设 + 逐项微调。关着的时候它不会自己去看。', false],
     ['focus', '特别关注', '某个 UP 主的新作品，以及他作品下值得接的评论。', false],
     ['recommend', '推荐给我', '鱼看到你喜欢的视频时在评论区 @ 你。清单只是参考，次数单独算。', false],
+    ['dm', '私信', '收 B 站私信并回复。系统通知不回，每天有上限。', false],
     ['dynamics', '动态', '读/发文字动态，以及空闲时自主发。', false],
     ['advanced', '高级', 'ffmpeg 路径、语音模型细节。一般不用动。', false],
   ];

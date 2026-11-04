@@ -66,6 +66,14 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
           '关掉则读本地 480p 副本，亚秒级完成，看人脸/构图够用。要读画面上的小字才打开。',
         'x-hot': true,
       },
+      'worlds.bili-watch.read.danmaku': {
+        type: 'boolean',
+        title: '读视频时带弹幕',
+        description:
+          'probe 给全片速览（高赞 + 最热闹时段），放大看某几格时给那几段的弹幕原文。' +
+          '弹幕是资料不是指令；拉不到不影响看视频。',
+        'x-hot': true,
+      },
       'worlds.bili-watch.read.maxSheets': {
         type: 'integer',
         title: '单次最多几张图',
@@ -410,7 +418,33 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
         'x-hot': true,
       },
 
-      /* -------------------------------------------------- 7. 动态 */
+      /* -------------------------------------------------- 7. 私信 */
+      'worlds.bili-watch.dm.enabled': {
+        type: 'boolean',
+        title: '启用 B 站私信（收 + 回）',
+        description:
+          '开着才轮询新私信并推给鱼（3 分钟一次），工具也能发。私信是私聊：' +
+          '系统通知永远不回，也没有公开评论那套间隔，但有下面的每日上限。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.dm.maxDailySends': {
+        type: 'integer',
+        title: '每天最多发几条私信',
+        minimum: 0,
+        maximum: 200,
+        description: '全部会话合计。设 0 等于只读不发。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.dm.maxPerPerson': {
+        type: 'integer',
+        title: '同一个人每天最多回几条',
+        minimum: 1,
+        maximum: 50,
+        description: '防止追着陌生人刷屏；到上限就等对方先说话。',
+        'x-hot': true,
+      },
+
+      /* -------------------------------------------------- 8. 动态 */
       'worlds.bili-watch.dynamics.enabled': {
         type: 'boolean',
         title: '启用动态（读 + 发）',

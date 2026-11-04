@@ -13,8 +13,9 @@
  * 按需挑：扫描挑 480p，放大时临时取 1080P 直链按帧读。
  */
 
-import { REFERER, USER_AGENT, type BiliClient, numericId } from './client.ts';
+import { DM_SEG, REFERER, USER_AGENT, type BiliClient, numericId } from './client.ts';
 import { BiliError, type Video, type VideoPart } from './types.ts';
+import { decodeDanmakuSegment, DanmakuPool } from './danmaku.ts';
 
 /** 从 BV 号 / av 号 / 完整链接里取出编号。**短链接（b23.tv）要用户先在浏览器展开。** */
 export function videoId(input: string): string {
@@ -302,4 +303,31 @@ export function stripSubtitleMarkup(text: unknown): string {
     .replace(/&amp;/gi, '&')
     .replace(/[ \t]+/g, ' ')
     .trim();
+}
+
+/**
+ * 拉一条视频的弹幕，返回按时间排好的池子。
+ *
+ * 一片（segment）约覆盖 6 分钟，长视频按片长算需要几片，**上限 6 片（36 分钟）**——
+ * 超长视频只给前 36 分钟的弹幕，调用方应在回执里说明覆盖范围。
+ * **任何失败都静默跳过**：弹幕是氛围，不是必需品，绝不能让它弄挂 probe/storyboard。
+ */
+export async function fetchDanmaku(
+  client: BiliClient,
+  meta: { aid: string | number; cid: string | number; durationSec?: number },
+  opts: { maxSegments?: number; signal?: AbortSignal } = {},
+): Promise<DanmakuPool> {
+  const pool = new DanmakuPool();
+  const perSegmentSec = 360;
+  const need = meta.durationSec ? Math.ceil(meta.durationSec / perSegmentSec) : 1;
+  const segments = Math.max(1, Math.min(need, opts.maxSegments ?? 6, 12));
+  for (let seg = 1; seg <= segments; seg += 1) {
+    try {
+      const bytes = await client.bytes(DM_SEG(meta.cid, meta.aid, seg), opts.signal);
+      pool.add(decodeDanmakuSegment(bytes));
+    } catch {
+      break; // 连不上就用手头已有的，别连环重试
+    }
+  }
+  return pool;
 }

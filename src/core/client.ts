@@ -24,6 +24,11 @@ import { BiliError, type Account, type CommentTarget, type NotificationPage } fr
 
 const API = 'https://api.bilibili.com';
 const PASSPORT = 'https://passport.bilibili.com';
+/** 私信域（会话列表 / 拉对话 / 发消息）。注释里那三条规矩对它一样生效。 */
+const VC = 'https://api.vc.bilibili.com';
+/** seg.so 弹幕分片也在主域。 */
+export const DM_SEG = (cid: string | number, aid: string | number, seg: number): string =>
+  `${API}/x/v2/dm/web/seg.so?type=1&oid=${cid}&pid=${aid}&segment_index=${seg}`;
 
 /** 与桌面版一致的浏览器 UA。**CDN 对空 UA 直接 403**。 */
 export const USER_AGENT =
@@ -242,11 +247,11 @@ export class BiliClient {
     path: string,
     params: Record<string, string | number> = {},
     signal?: AbortSignal,
-    opts: { withCookie?: boolean; form?: Record<string, string | number>; origin?: string } = {},
+    opts: { withCookie?: boolean; form?: Record<string, string | number>; origin?: string; referer?: string } = {},
   ): Promise<any> {
     const base = opts.origin ?? API;
     const url = new URL(path, base);
-    if (![API, PASSPORT].includes(url.origin)) throw new BiliError('请求目标无效。', 'invalid');
+    if (![API, PASSPORT, VC].includes(url.origin)) throw new BiliError('请求目标无效。', 'invalid');
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
 
     const { data } = await this.raw(
@@ -254,12 +259,18 @@ export class BiliClient {
       opts.form
         ? {
           method: 'POST',
-          headers: { Origin: 'https://www.bilibili.com', 'Content-Type': 'application/x-www-form-urlencoded' },
+          headers: {
+            Origin: opts.referer ? 'https://message.bilibili.com' : 'https://www.bilibili.com',
+            ...(opts.referer ? { Referer: opts.referer } : {}),
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
           body: new URLSearchParams(
             Object.entries(opts.form).map(([k, v]) => [k, String(v)]),
           ),
         }
-        : {},
+        : opts.referer
+          ? { headers: { Referer: opts.referer } }
+          : {},
       signal,
       opts.withCookie !== false,
     );
@@ -524,5 +535,38 @@ export class BiliClient {
   /** 拉一份 B 站媒体域上的 JSON（字幕文件）。 */
   async assetJson(url: string, signal?: AbortSignal): Promise<any> {
     return (await this.raw(this.assertAssetUrl(url), {}, signal, false)).data;
+  }
+
+  /**
+   * 拿二进制响应（弹幕 seg.so 的 protobuf 体）。
+   *
+   * 上限 4MB：一段弹幕通常几十 KB，超了只可能是风控页或攻击载荷。
+   * 带 cookie（会员弹幕更多），但不判 code —— 它不是 JSON，调用方自己解码。
+   */
+  async bytes(url: string, signal?: AbortSignal): Promise<Uint8Array> {
+    const timeout = AbortSignal.timeout(this.o.timeoutMs ?? 15_000);
+    const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    const response = await this.fetcher(url, {
+      headers: Object.fromEntries(this.headers(true)),
+      redirect: 'error',
+      signal: combined,
+    });
+    if (!response.ok && response.status !== 304) {
+      const kind = [412, 429].includes(response.status) ? 'rate' : 'network';
+      throw new BiliError(`B站返回 HTTP ${response.status}`, kind);
+    }
+    const buf = await response.arrayBuffer();
+    if (buf.byteLength > 4 * 1024 * 1024) throw new BiliError('B站响应过大。', 'network');
+    return new Uint8Array(buf);
+  }
+
+  /** 从当前 cookie 里取一个字段的值（私信发消息要 `DedeUserID` 和 `bili_jct`）。 */
+  cookieField(name: string): string {
+    for (const part of this.currentCookie().split(';')) {
+      const idx = part.indexOf('=');
+      if (idx < 0) continue;
+      if (part.slice(0, idx).trim() === name) return part.slice(idx + 1).trim();
+    }
+    return '';
   }
 }

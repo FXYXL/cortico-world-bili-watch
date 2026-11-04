@@ -29,6 +29,8 @@ interface State {
   dynamicPosts?: DynamicPost[];
   dynamics?: PublicDynamic[];
   dynamicReads?: Record<string, number>;
+  /** 私信发送账本（3 天窗口，护栏用）。 */
+  dmSends?: Array<{ at: string; talkerId: string }>;
   focusBindings: FocusBinding[];
   focusWorks: FocusWork[];
   focusChecks: Record<string, FocusCheck>;
@@ -99,11 +101,11 @@ export class SocialStore {
           throw new Error();
         if (s.dynamicPosts !== undefined && !Array.isArray(s.dynamicPosts)) throw new Error();
         if (s.dynamics !== undefined && !Array.isArray(s.dynamics)) throw new Error();
-        if (
-          s.dynamicReads !== undefined &&
+        if (s.dynamicReads !== undefined &&
           (!s.dynamicReads || typeof s.dynamicReads !== 'object' || Array.isArray(s.dynamicReads))
         )
           throw new Error();
+        if (s.dmSends !== undefined && !Array.isArray(s.dmSends)) throw new Error();
         for (const key of [
           'videos',
           'comments',
@@ -158,6 +160,28 @@ export class SocialStore {
     return structuredClone(
       (this.state.dynamicPosts ?? []).filter((r) => r.accountId === accountId),
     );
+  }
+  /** 私信发送账本：3 天窗口，护栏查额度用。 */
+  dmSends(): Array<{ at: string; talkerId: string }> {
+    return structuredClone(this.state.dmSends ?? []);
+  }
+  recordDmSend(talkerId: string): void {
+    const rows = this.state.dmSends ?? [];
+    rows.push({ at: new Date().toISOString(), talkerId });
+    const cutoff = Date.now() - 3 * 86_400_000;
+    this.state.dmSends = rows.filter((x) => Date.parse(x.at) >= cutoff);
+    this.save();
+  }
+  dmSendsToday(): { total: number; toPerson: Map<string, number> } {
+    const today = new Date().toISOString().slice(0, 10);
+    const per = new Map<string, number>();
+    let total = 0;
+    for (const x of this.state.dmSends ?? []) {
+      if (!String(x.at).startsWith(today)) continue;
+      total += 1;
+      per.set(x.talkerId, (per.get(x.talkerId) ?? 0) + 1);
+    }
+    return { total, toPerson: per };
   }
   saveDynamicPost(record: DynamicPost) {
     const rows = this.state.dynamicPosts ?? [];
