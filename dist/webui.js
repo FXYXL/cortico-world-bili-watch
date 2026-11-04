@@ -391,6 +391,12 @@ var BILI_WATCH_CONFIG_GROUP = {
         description: "\u9632\u6B62\u8FFD\u7740\u964C\u751F\u4EBA\u5237\u5C4F\uFF1B\u5230\u4E0A\u9650\u5C31\u7B49\u5BF9\u65B9\u5148\u8BF4\u8BDD\u3002",
         "x-hot": true
       },
+      "worlds.bili-watch.dm.trustedUids": {
+        type: "string",
+        title: "\u81EA\u5DF1\u4EBA\u540D\u5355\uFF08\u4E0D\u53D7\u4E0A\u9650\uFF09",
+        description: "UID \u5217\u8868\uFF0C\u9017\u53F7\u6216\u7A7A\u683C\u5206\u9694\u3002\u540D\u5355\u91CC\u7684\u4EBA\u53D1\u79C1\u4FE1**\u4E0D\u53D7\u6BCF\u65E5\u4E0A\u9650\u7EA6\u675F**\u2014\u2014\u62A4\u680F\u662F\u9632\u9A9A\u6270\u964C\u751F\u4EBA\u7684\uFF0C\u4E0D\u8BE5\u62E6\u4E3B\u4EBA\u3002**\u7559\u7A7A = \u590D\u7528\u300C\u7279\u522B\u5173\u6CE8\u300D\u7ED1\u5B9A\u7684 UID**\uFF08\u4E3B\u4EBA\u5DF2\u5728\u90A3\u8FB9\u7ED1\u8FC7\u5C31\u4E0D\u7528\u586B\uFF09\u3002",
+        "x-hot": true
+      },
       /* -------------------------------------------------- 8. 动态 */
       "worlds.bili-watch.dynamics.enabled": {
         type: "boolean",
@@ -644,7 +650,8 @@ var BILI_WATCH_DEFAULTS = {
   dm: {
     enabled: true,
     maxDailySends: 20,
-    maxPerPerson: 5
+    maxPerPerson: 5,
+    trustedUids: ""
   },
   media: {
     mediaMaxMB: 300,

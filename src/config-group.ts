@@ -443,6 +443,14 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
         description: '防止追着陌生人刷屏；到上限就等对方先说话。',
         'x-hot': true,
       },
+      'worlds.bili-watch.dm.trustedUids': {
+        type: 'string',
+        title: '自己人名单（不受上限）',
+        description:
+          'UID 列表，逗号或空格分隔。名单里的人发私信**不受每日上限约束**——护栏是防骚扰陌生人的，不该拦主人。' +
+          '**留空 = 复用「特别关注」绑定的 UID**（主人已在那边绑过就不用填）。',
+        'x-hot': true,
+      },
 
       /* -------------------------------------------------- 8. 动态 */
       'worlds.bili-watch.dynamics.enabled': {

@@ -591,8 +591,10 @@ const socialTools = [
       'action=send replies to a real person.',
       '',
       'New DMs arrive as bili.dm events. DM is a private channel: no public-voice rules, no',
-      'comment interval - but there IS a daily send cap, and 1:1 courtesy still applies:',
-      'reply to what was asked, do not mass-message, do not chase no-replies.',
+      'comment interval - but there IS a daily send cap for strangers, and 1:1 courtesy still',
+      'applies: reply to what was asked, do not mass-message, do not chase no-replies.',
+      '**Trusted UIDs (default: the special-focus binding) have no daily cap** - messaging the',
+      'operator there is never quota-blocked.',
     ].join('\n'),
     parameters: {
       type: 'object',

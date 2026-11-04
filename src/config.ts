@@ -244,6 +244,11 @@ export interface BiliWatchConfig {
     maxDailySends: number;
     /** 同一个人每天最多回几条。 */
     maxPerPerson: number;
+    /**
+     * 自己人名单（UID，逗号/空格分隔）：**不受上面两个上限约束**。
+     * 留空 = 复用特别关注绑定的 UID。护栏是防骚扰陌生人的，不该拦主人。
+     */
+    trustedUids: string;
   };
 
   /** 媒体与额度 */
@@ -358,6 +363,7 @@ export const BILI_WATCH_DEFAULTS: BiliWatchConfig = {
     enabled: true,
     maxDailySends: 20,
     maxPerPerson: 5,
+    trustedUids: '',
   },
 
   media: {

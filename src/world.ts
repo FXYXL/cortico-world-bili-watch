@@ -840,23 +840,31 @@ export class BiliWatchWorld implements World {
       if (!talkerId) throw new Error('action=send 需要 talkerId（数字 UID）。');
       const text = String(args.text ?? '').trim();
       if (!text) throw new Error('action=send 需要 text（要发的内容）。');
-      const today = this.store.dmSendsToday();
-      const used = today.toPerson.get(talkerId) ?? 0;
-      if (today.total >= cfg.dm.maxDailySends) {
-        throw new Error(`今天私信额度用完了（${today.total}/${cfg.dm.maxDailySends}），明天再回。`);
-      }
-      if (used >= cfg.dm.maxPerPerson) {
-        throw new Error(
-          `今天给 UID ${talkerId} 已经发过 ${used} 条（每人上限 ${cfg.dm.maxPerPerson}）。` +
-          '对方没回就不要追了，等对方先说话。',
-        );
+      const trusted = this.dmTrustedUids();
+      const isTrusted = trusted.has(talkerId);
+      if (!isTrusted) {
+        // 护栏只防骚扰陌生人；自己人（特别关注 / 名单里）不受上限约束
+        const today = this.store.dmSendsToday();
+        const used = today.toPerson.get(talkerId) ?? 0;
+        if (today.total >= cfg.dm.maxDailySends) {
+          throw new Error(`今天私信额度用完了（${today.total}/${cfg.dm.maxDailySends}），明天再回。`);
+        }
+        if (used >= cfg.dm.maxPerPerson) {
+          throw new Error(
+            `今天给 UID ${talkerId} 已经发过 ${used} 条（每人上限 ${cfg.dm.maxPerPerson}）。` +
+            '对方没回就不要追了，等对方先说话。',
+          );
+        }
       }
       const { receiptId } = await sendDm(this.client, talkerId, text, { signal: callCtx.signal });
-      this.store.recordDmSend(talkerId);
+      this.store.recordDmSend(talkerId); // 自己人也记账（只作统计，不做拦截）
       // 发完把水位推到当前，避免轮询把这条当成"新消息"再推给自己
       this.dmWatermark.set(Number(talkerId), Math.floor(Date.now() / 1000));
+      const left = trusted.has(talkerId)
+        ? '不限（自己人）'
+        : `${Math.max(0, cfg.dm.maxDailySends - this.store.dmSendsToday().total)} 条`;
       return {
-        text: `已发给 UID ${talkerId}（凭据 ${receiptId}）。今天还能发 ${Math.max(0, cfg.dm.maxDailySends - this.store.dmSendsToday().total)} 条。`,
+        text: `已发给 ${this.contactName(talkerId)}（凭据 ${receiptId}）。今天还能发 ${left}。`,
       };
     }
 
@@ -910,6 +918,28 @@ export class BiliWatchWorld implements World {
       if (c.userId === uid) return c.names[0] ? `${c.names[0]}（UID ${uid}）` : `UID ${uid}`;
     }
     return `UID ${uid}`;
+  }
+
+  /**
+   * 私信的「自己人」名单：**不受每日上限约束**（护栏只防骚扰陌生人）。
+   *
+   * 来源：配置 `dm.trustedUids`（逗号/空格分隔的 UID）；**留空 = 复用特别关注
+   * 绑定的 UID**——主人已经在那儿绑过一次，开箱即用，不用填两遍。
+   */
+  private dmTrustedUids(): Set<string> {
+    const cfg = this.cfg();
+    const list = new Set<string>();
+    for (const part of String(cfg.dm.trustedUids ?? '').split(/[\s,，;；]+/)) {
+      if (/^\d+$/.test(part)) list.add(part);
+    }
+    if (!list.size) {
+      const acc = this.service.currentAccount;
+      if (acc) {
+        const binding = this.store.focusBinding(acc.id, cfg.focus.account.trim());
+        if (binding?.ownerId && /^\d+$/.test(binding.ownerId)) list.add(binding.ownerId);
+      }
+    }
+    return list;
   }
 
   /**
