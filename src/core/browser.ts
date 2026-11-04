@@ -307,6 +307,20 @@ export class BilibiliBrowserSender {
       ...this.lastResult,
     };
   }
+  /**
+   * 给需要真实页面的功能（动态读/发）一个受限入口。
+   *
+   * **不是开放 page 对象**：调用方只能在这个回调里用，退出后页面归浏览器层管。
+   * 这样动态功能坏了不会把发评的浏览器状态一起带垮。
+   */
+  async withPage<T>(
+    signal: AbortSignal,
+    fn: (page: import('playwright-core').Page) => Promise<T>,
+  ): Promise<T> {
+    const opened = await this.open(signal);
+    return fn(opened.page);
+  }
+
   async openLogin() {
     if (this.busy) throw new BiliError('B站正在处理操作，请完成后再登录。', 'rejected');
     if (this.loginOpen) return { detail: 'B站官网登录窗口已打开，请在该窗口完成登录。' };

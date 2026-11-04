@@ -18,6 +18,7 @@
  * 3. **不确定就不重发**：发送结果 unknown 时保持 unknown，绝不当失败重试。
  */
 
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +29,11 @@ import type { WorldContext } from 'cortico/world.ts';
 import { BILI_WATCH_DEFAULTS, BILI_WATCH_ID, type BiliWatchConfig } from './config.ts';
 import { BILI_WATCH_CONFIG_GROUP } from './config-group.ts';
 import { BILI_WATCH_TOOL_DECLS } from './tools.ts';
-import { BiliClient } from './core/client.ts';
+import { BiliClient, cookieField } from './core/client.ts';
+// **不要静态 import 浏览器层**：它依赖 playwright-core，没装时会让整个插件加载失败。
+// 改成用到时才 import（见 browser()）。
+import type { BilibiliBrowserSender } from './core/browser.ts';
+import { readDynamicPage } from './core/dynamics.ts';
 import { getVideo, getSubtitles } from './core/video.ts';
 import { readComments } from './core/comments.ts';
 import { BiliError, type CommentTarget, type InboxItem } from './core/types.ts';
@@ -65,6 +70,8 @@ export class BiliWatchWorld implements World {
   private readonly service: BiliService;
   private readonly roaming: Roaming;
   private readonly client: BiliClient;
+  /** 浏览器发评通道。**惰性创建**：只有 transport=browser 且真要用时才起浏览器。 */
+  private browserSender: BilibiliBrowserSender | null = null;
 
   private timer: ReturnType<typeof setTimeout> | null = null;
   private controller = new AbortController();
@@ -89,6 +96,10 @@ export class BiliWatchWorld implements World {
       client: () => this.client,
       timezone: ctx.timezone,
       secret: (n) => this.secret(n),
+      // 只有配置选了 browser 才提供通道；否则 service 回落 api
+      ...(ctx.cfg.posting?.transport === 'browser'
+        ? { browser: { send: async (t, text, sig, acc) => (await this.browser()).send(t, text, sig, acc) } }
+        : {}),
     });
     this.roaming = new Roaming(() => ctx.cfg, this.store, ctx.timezone);
   }
@@ -126,6 +137,39 @@ export class BiliWatchWorld implements World {
     } catch {
       /* 存不了就算了，下次还得重扫 */
     }
+  }
+
+  /**
+   * 惰性创建浏览器发送器。
+   *
+   * **不要在世界构造时就起浏览器** —— 那会拖慢桌宠启动，而且大多数人不选 browser。
+   * 只有真要用的时候才起，起不来会明确报错（缺 Chrome/Edge 是这个通道最常见的失败）。
+   */
+  private async browser(): Promise<BilibiliBrowserSender> {
+    if (!this.browserSender) {
+      // 用到才加载：缺 playwright-core 时给一句能照着做的话，而不是让整个插件起不来。
+      let mod: any;
+      try {
+        mod = await import('./core/browser.ts');
+      } catch (e) {
+        throw new Error(
+          '浏览器发评/动态需要 playwright-core，但这个依赖没装。' +
+            '在扩展目录跑 `pnpm add playwright-core`，或者把「发评方式」改成 api。' +
+            `（原始错误：${(e as Error).message.slice(0, 80)}）`,
+        );
+      }
+      const dirs = worldDirs(this.ctx.dataDir);
+      this.browserSender = new mod.BilibiliBrowserSender(
+        join(dirs.root, 'browser-profile'),
+        () => this.cookie(),
+        (c) => this.saveCookie(c),
+        () => String((this.cfg() as any).browser?.executableFile ?? ''),
+        () => Boolean(this.cfg().posting.enabled),
+        () => true,
+        () => Number(this.cfg().media.maxCacheMB) || 128,
+      );
+    }
+    return this.browserSender;
   }
 
   private ffmpegPath(): string {
@@ -1195,6 +1239,16 @@ export class BiliWatchWorld implements World {
     };
   }
 
+  /**
+   * 动态：读 / 发。
+   *
+   * **必须走真实浏览器** —— B站的动态页（`t.bilibili.com`）是前端渲染的，
+   * 纯接口拿不到首页动态流，发布也要过页面的 composer。
+   *
+   * 发布分两步（和评论一样的道理）：`prepare` 只生成草稿**不提交**，
+   * `publish` 才真的点发布按钮。草稿存在 store 里，凭 `draftId` 引用 ——
+   * 这样"审一遍再发"是有物理保证的，不是靠模型自觉。
+   */
   private async dynamic(args: Args, callCtx: { signal?: AbortSignal }): Promise<ToolOutcome> {
     const cfg = this.cfg();
     if (!cfg.dynamics.enabled) {
@@ -1203,12 +1257,137 @@ export class BiliWatchWorld implements World {
         failed: true,
       };
     }
-    void callCtx;
-    // 动态读写走浏览器（B站的动态页面不是纯接口能覆盖的）
-    throw new Error(
-      '动态功能已启用配置，但浏览器层还没接上（B站动态页需要真实浏览器）。' +
-      '这一块正在做：先保证评论/闲逛/视频阅读可用。',
-    );
+    const action = String(args.action ?? 'list');
+    /**
+     * **不要一进来就 connect。**
+     *
+     * `connect()` 要打 `nav` 接口核对账号 —— 那是**一次真实网络往返**。
+     * 但 `cached` / `posts` 只是读本地记录，根本不需要它。
+     * 实测：断网时这几个动作会各卡 15 秒超时，看起来像"动态功能挂了"。
+     *
+     * 所以：本地读的先用已有账号（没有就报清楚），只有真要发/真要用浏览器时才 connect。
+     */
+    const needsNetwork = action !== 'cached' && action !== 'posts' && action !== 'prepare';
+    const acc = this.service.currentAccount
+      ?? (needsNetwork ? await this.service.connect(callCtx.signal) : null);
+    // cached / posts / prepare 全是**本地读或本地写**，不需要账号核对。
+    // 只有真读动态流（list/read）和真发布（publish）才要 connect。
+    // prepare 只写本地草稿、不发请求：没有账号时用 cookie 里的 DedeUserID，
+    // 反正 publish 那一步会重新核对。
+    const me = acc ?? { id: cookieField(this.cookie(), 'DedeUserID') ?? 'unknown', name: '未核验' };
+
+    switch (action) {
+      case 'list':
+      case 'read':
+      case 'cached': {
+        if (action === 'cached') {
+          const cached = this.store.dynamics(me.id);
+          return {
+            text: cached.length
+              ? JSON.stringify({ cached: true, items: cached })
+              : JSON.stringify({ cached: true, items: [], note: '还没有缓存过；用 action=list 读一次。' }),
+          };
+        }
+        if (action === 'read' && !args.dynamic) throw new Error('action=read 需要 dynamic（动态链接或 id）。');
+        const limit = Math.max(1, Math.min(5, Number(args.limit) || 5));
+        // 频率限制：B站动态接口读得太快会返回空
+        if (Date.now() - this.lastDynamicReadAt < 3000) {
+          throw new Error('刚读过一次，稍等一下再读（B站动态接口有频率限制）。');
+        }
+        this.lastDynamicReadAt = Date.now();
+
+        const browser = await this.browser();
+        const items = await browser.withPage(
+          AbortSignal.any([
+            this.controller.signal,
+            ...(callCtx.signal ? [callCtx.signal] : []),
+            AbortSignal.timeout(60_000),
+          ]),
+          (page) =>
+            readDynamicPage(page, {
+              ...(args.dynamic ? { id: String(args.dynamic) } : {}),
+              limit,
+            }),
+        );
+        this.store.rememberDynamics(me.id, items as any);
+        return { text: JSON.stringify({ items }) };
+      }
+
+      case 'posts': {
+        return { text: JSON.stringify({ posts: this.store.dynamicPosts(me.id) }) };
+      }
+
+      case 'prepare': {
+        if (!cfg.dynamics.allowPublishing) {
+          throw new Error('发动态没开。要发请先在配置页启用「允许发文字动态」。');
+        }
+        const text = String(args.text ?? '').trim();
+        if (!text) throw new Error('action=prepare 需要 text（要发的正文）。');
+        if (text.length > 500) throw new Error('动态正文最长 500 字。');
+        // 草稿就是 status='prepared' 的 dynamicPost —— store 会在 1 小时后回收没发出去的
+        const draft: any = {
+          id: randomUUID(),
+          accountId: me.id,
+          text,
+          status: 'prepared',
+          createdAt: new Date().toISOString(),
+        };
+        this.store.saveDynamicPost(draft);
+        return {
+          text: JSON.stringify({
+            status: 'needs_review',
+            draftId: (draft as any).id,
+            text,
+            note: '这是草稿，**还没发**。核对后调 action=publish 并带上 draftId。',
+          }),
+        };
+      }
+
+      case 'publish': {
+        if (!cfg.dynamics.allowPublishing) throw new Error('发动态没开。');
+        const draftId = String(args.draftId ?? '');
+        const draft = this.store
+          .dynamicPosts(me.id)
+          .find((p: any) => p.id === draftId && p.status === 'prepared');
+        if (!draft) throw new Error('找不到这份草稿，或者它已经用过了。重新 prepare。');
+
+        const today = todayKey(this.ctx.timezone).slice(0, 10);
+        const usedToday = this.store
+          .dynamicPosts(me.id)
+          .filter((p: any) => String(p.createdAt ?? '').startsWith(today)).length;
+        if (usedToday >= cfg.dynamics.maxDailyPosts) {
+          throw new Error(`今日动态额度已用完（${usedToday}/${cfg.dynamics.maxDailyPosts}）。`);
+        }
+
+        const browser = await this.browser();
+        const result: any = await browser.publishDynamic(
+          { accountId: me.id, text: (draft as any).text } as any,
+          callCtx.signal,
+          () => cfg.dynamics.allowPublishing,
+        );
+        this.store.saveDynamicPost({
+          id: result.id ?? draftId,
+          accountId: me.id,
+          text: (draft as any).text,
+          status: result.status,
+          createdAt: new Date().toISOString(),
+          ...(result.detail ? { detail: result.detail } : {}),
+        } as any);
+
+        return {
+          text: JSON.stringify({
+            ...result,
+            note: result.status === 'sent'
+              ? '平台已受理。**结果不明不等于失败**，不要换文案重发。'
+              : '见 status 与 detail；未提交的可以重新 prepare。',
+          }),
+          ...(result.status === 'rejected' ? { failed: true as const } : {}),
+        };
+      }
+
+      default:
+        throw new Error(`未知 action: ${action}`);
+    }
   }
 
   private async status(): Promise<ToolOutcome> {

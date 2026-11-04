@@ -79,6 +79,16 @@ export interface ServiceDeps {
   timezone: string;
   /** 读 secret（cookie）。 */
   secret: (name: string) => string;
+  /** 浏览器发评通道。配 transport='browser' 时才用；没有就回落 api。 */
+  browser?: {
+    send(
+      target: CommentTarget,
+      text: string,
+      signal?: AbortSignal,
+      expectedAccountId?: string,
+      mention?: { id: string; name: string },
+    ): Promise<SendReceipt>;
+  };
 }
 
 export class BiliService {
@@ -448,11 +458,24 @@ export class BiliService {
     });
 
     try {
-      const receipt = await sendComment(this.d.client(), target, text, {
-        signal,
-        expectedAccountId: acc.id,
-        ...(mention ? { mention } : {}),
-      });
+      /**
+       * **按配置选发送通道**。
+       *
+       * `api` 走接口（不用开浏览器，最省事）；`browser` 用真实 Chrome/Edge 点评论框
+       * （更接近真人，更不容易被判定为机器人，但要装浏览器、也慢）。
+       *
+       * 两个通道都有各自的失败语义：浏览器失败时**可能已经点出去了**
+       * （页面点了按钮但网络断了），所以 browser 的失败一律当 `unknown` 处理，
+       * 只有 api 能明确区分"确定没发出去"。
+       */
+      const transport = this.d.cfg.posting.transport ?? 'api';
+      const receipt = transport === 'browser' && this.d.browser
+        ? await this.d.browser.send(target, text, signal, acc.id, mention ?? undefined)
+        : await sendComment(this.d.client(), target, text, {
+          signal,
+          expectedAccountId: acc.id,
+          ...(mention ? { mention } : {}),
+        });
 
       // 发完立刻核验可见性（**用访客视角**）
       let visibility;
