@@ -123,12 +123,15 @@ export interface SendRecord {
   transport?: 'api' | 'browser';
   visibility?: VisibilityReport;
   detail?: string;
+  platformState?: number;
   inboxId?: string;
   roamId?: string;
   /** 这条是回复通知还是主动发言 —— 两个额度账本靠它分开。 */
   kind: 'reply' | 'proactive' | 'focus';
   /** 主人评论区自动回应单独计账。 */
   focusOwnerId?: string;
+  /** 这条发言里 @ 了谁（有就说明用掉了 @ 额度）。 */
+  mention?: { id: string; name: string };
 }
 
 /** B 站错误分类。**分类决定模型下一步做什么**，所以不能糊成一个 Error。 */
