@@ -375,6 +375,14 @@ var BILI_WATCH_CONFIG_GROUP = {
         description: "\u5F00\u7740\u624D\u8F6E\u8BE2\u65B0\u79C1\u4FE1\u5E76\u63A8\u7ED9\u9C7C\uFF083 \u5206\u949F\u4E00\u6B21\uFF09\uFF0C\u5DE5\u5177\u4E5F\u80FD\u53D1\u3002\u79C1\u4FE1\u662F\u79C1\u804A\uFF1A\u7CFB\u7EDF\u901A\u77E5\u6C38\u8FDC\u4E0D\u56DE\uFF0C\u4E5F\u6CA1\u6709\u516C\u5F00\u8BC4\u8BBA\u90A3\u5957\u95F4\u9694\uFF0C\u4F46\u6709\u4E0B\u9762\u7684\u6BCF\u65E5\u4E0A\u9650\u3002",
         "x-hot": true
       },
+      "worlds.bili-watch.dm.pollSec": {
+        type: "integer",
+        title: "\u79C1\u4FE1\u8F6E\u8BE2\u95F4\u9694\uFF08\u79D2\uFF09",
+        minimum: 30,
+        maximum: 1800,
+        description: "\u591A\u4E45\u67E5\u4E00\u6B21\u65B0\u79C1\u4FE1\u3002\u79C1\u4FE1\u6CA1\u6709\u8BC4\u8BBA\u533A\u6025\uFF0C\u9ED8\u8BA4 180\uFF083 \u5206\u949F\uFF09\u3002\u6539\u5B8C\u5373\u65F6\u751F\u6548\u3002",
+        "x-hot": true
+      },
       "worlds.bili-watch.dm.maxDailySends": {
         type: "integer",
         title: "\u6BCF\u5929\u6700\u591A\u53D1\u51E0\u6761\u79C1\u4FE1",
@@ -707,6 +715,7 @@ var BILI_WATCH_DEFAULTS = {
   },
   dm: {
     enabled: true,
+    pollSec: 180,
     maxDailySends: 20,
     maxPerPerson: 5,
     trustedUids: ""

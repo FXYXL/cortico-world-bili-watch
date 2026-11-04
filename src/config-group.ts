@@ -427,6 +427,14 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
           '系统通知永远不回，也没有公开评论那套间隔，但有下面的每日上限。',
         'x-hot': true,
       },
+      'worlds.bili-watch.dm.pollSec': {
+        type: 'integer',
+        title: '私信轮询间隔（秒）',
+        minimum: 30,
+        maximum: 1800,
+        description: '多久查一次新私信。私信没有评论区急，默认 180（3 分钟）。改完即时生效。',
+        'x-hot': true,
+      },
       'worlds.bili-watch.dm.maxDailySends': {
         type: 'integer',
         title: '每天最多发几条私信',

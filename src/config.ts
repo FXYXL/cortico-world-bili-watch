@@ -240,6 +240,8 @@ export interface BiliWatchConfig {
   dm: {
     /** 开关：关掉就不轮询、工具也会拒发。 */
     enabled: boolean;
+    /** 私信轮询间隔（秒）。私信没有评论区急，默认 3 分钟。 */
+    pollSec: number;
     /** 每天最多发几条（全部会话合计）。 */
     maxDailySends: number;
     /** 同一个人每天最多回几条。 */
@@ -380,6 +382,7 @@ export const BILI_WATCH_DEFAULTS: BiliWatchConfig = {
 
   dm: {
     enabled: true,
+    pollSec: 180,
     maxDailySends: 20,
     maxPerPerson: 5,
     trustedUids: '',

@@ -70,8 +70,8 @@ const mb = (n: number) => (n >= 10 ? n.toFixed(0) : n.toFixed(1));
  * 与 probe 里给建议的阈值一致（8 分钟）—— 不一致会让模型照建议调用却得不到分段。
  */
 const LONG_VIDEO_SEC = 480;
-/** 私信轮询间隔：比通知轮询松——私信没有评论区那么急。 */
-const DM_CHECK_INTERVAL_MS = 180_000;
+/** 私信轮询间隔兜底值：配置 `dm.pollSec`（默认 180 秒），最低 30 秒。 */
+const DM_CHECK_MIN_MS = 30_000;
 
 export class BiliWatchWorld implements World {
   readonly id = BILI_WATCH_ID;
@@ -1015,7 +1015,7 @@ export class BiliWatchWorld implements World {
   private async pollDm(): Promise<void> {
     const cfg = this.cfg();
     if (!cfg.dm?.enabled || !this.cookie()) return;
-    if (Date.now() - this.dmCheckAt < DM_CHECK_INTERVAL_MS) return;
+    if (Date.now() - this.dmCheckAt < Math.max(DM_CHECK_MIN_MS, Number(cfg.dm.pollSec) * 1000 || 180_000)) return;
     this.dmCheckAt = Date.now();
     const sessions = await listDmSessions(this.client, { max: 10 }).catch(() => null);
     if (!sessions) return;
