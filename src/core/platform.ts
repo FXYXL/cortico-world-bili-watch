@@ -1,3 +1,32 @@
+/**
+ * core/platform.ts — 社交层的类型定义（**历史遗留，与 `types.ts` 有重叠**）。
+ *
+ * ## 现状：同一批类型有两份
+ *
+ * 本文件是从多平台版本（B站/抖音/快手）带过来的，`social/` 下的
+ * `store.ts` / `focus.ts` / `archive.ts` 都从这里取类型。
+ * 而 `core/types.ts` 是重写社交层时新建的、单平台精简版。
+ *
+ * 两边**重叠**的有：`CommentTarget` `PublicComment` `InboxItem` `SendReceipt`
+ *   `VisibilityReport` `SendRecord` `NotificationPage` `Account` `Video`
+ *
+ * 本文件**独有**：`PublicVideo` `FocusMention` `ConversationBrief`
+ *   `PreparationNote` `SocialPlatform` `PlatformError` `describeDelivery`
+ *
+ * ## 该用哪个
+ *
+ * **新代码用 `core/types.ts`。** 本文件保留只是为了让那三个文件不用改 import。
+ *
+ * ## 两份定义已经造成过一次真实 bug
+ *
+ * 本文件的 `InboxItem` 有 `platform` 字段，`types.ts` 的没有。
+ * 于是 `store.rememberContact()` 里的 `item.platform !== 'bilibili'`
+ * 在单平台下恒真（`undefined !== 'bilibili'`），**联系人表永远是空的** ——
+ * 而且不报错。真机验证「迁移后 contacts 为 0」时才发现的。
+ *
+ * 所以：**动这边的类型时，记得同步 `types.ts`**；或者干脆把它们合并掉。
+ */
+
 export interface CommentTarget {
   oid: string;
   type: number;

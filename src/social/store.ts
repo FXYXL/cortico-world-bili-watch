@@ -251,7 +251,14 @@ export class SocialStore {
   }
   private rememberContact(item: InboxItem) {
     if (
-      item.platform !== 'bilibili' ||
+      /**
+       * 单平台插件里 `platform` 字段不存在 —— 用 `?? 'bilibili'` 兜底。
+       *
+       * 原来写的是 `item.platform !== 'bilibili'`：从多平台版本改过来时这个字段被去掉了，
+       * 于是 `undefined !== 'bilibili'` 恒真，**这个函数永远直接 return**，联系人表一直是空的。
+       * 真机验证「迁移后 contacts 为 0」时发现的。
+       */
+      (item.platform ?? 'bilibili') !== 'bilibili' ||
       item.focusOwnerId ||
       !/^[1-9]\d*$/.test(item.authorId) ||
       !Number.isFinite(item.occurredAt)
