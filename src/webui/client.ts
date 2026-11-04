@@ -540,6 +540,7 @@ function sectionOf(path: string): string {
   if (key.startsWith('focus.')) return 'focus';
   if (key.startsWith('recommend.')) return 'recommend';
   if (key.startsWith('dm.')) return 'dm';
+  if (key.startsWith('watch.')) return 'watch';
   if (key.startsWith('dynamics.')) return 'dynamics';
   return 'advanced';
 }
@@ -611,6 +612,7 @@ export function mountSettings(ctx: WebUiPanelContext): void {
     ['focus', '特别关注', '某个 UP 主的新作品，以及他作品下值得接的评论。', false],
     ['recommend', '推荐给我', '鱼看到你喜欢的视频时在评论区 @ 你。清单只是参考，次数单独算。', false],
     ['dm', '私信', '收 B 站私信并回复。系统通知不回，每天有上限。', false],
+    ['watch', '陪看', '主人发起的一起看：共同窗口 + 观察帧。注意每帧的 token 开销。', false],
     ['dynamics', '动态', '读/发文字动态，以及空闲时自主发。', false],
     ['advanced', '高级', 'ffmpeg 路径、语音模型细节。一般不用动。', false],
   ];

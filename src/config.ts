@@ -251,6 +251,25 @@ export interface BiliWatchConfig {
     trustedUids: string;
   };
 
+  /** 陪看（一起看） */
+  watch: {
+    /** 总开关：关了工具直接拒。 */
+    enabled: boolean;
+    /** 浏览器程序路径；留空自动找 Chrome/Edge。 */
+    executable: string;
+    windowWidth: number;
+    windowHeight: number;
+    /** 两张观察帧的最小间隔（秒）。越大越省 token。 */
+    observeIntervalSec: number;
+    /** 帧密度：格数 = 间隔 × 密度，封顶 maxFrames。 */
+    frameDensity: number;
+    maxFrames: number;
+    cellWidth: number;
+    cellHeight: number;
+    /** 陪看超过这个分钟数自动暂停观察（窗口不关）。0 = 不限。 */
+    maxWatchMinutes: number;
+  };
+
   /** 媒体与额度 */
   media: {
     /** 下载副本的容量上限（MB）。 */
@@ -364,6 +383,19 @@ export const BILI_WATCH_DEFAULTS: BiliWatchConfig = {
     maxDailySends: 20,
     maxPerPerson: 5,
     trustedUids: '',
+  },
+
+  watch: {
+    enabled: true,
+    executable: '',
+    windowWidth: 1280,
+    windowHeight: 720,
+    observeIntervalSec: 30,
+    frameDensity: 0.3,
+    maxFrames: 4,
+    cellWidth: 480,
+    cellHeight: 270,
+    maxWatchMinutes: 120,
   },
 
   media: {

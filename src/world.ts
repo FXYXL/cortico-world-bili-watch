@@ -40,6 +40,7 @@ import { DynamicAutonomy } from './core/dynamic-autonomy.ts';
 import { getVideo, getSubtitles, fetchDanmaku } from './core/video.ts';
 import { danmakuOverview, DanmakuPool, spread as spreadList, type Danmaku } from './core/danmaku.ts';
 import { listDmSessions, readDmMessages, sendDm } from './core/dm.ts';
+import { CoWatch } from './watch/coWatch.ts';
 import { readComments } from './core/comments.ts';
 import { BiliError, type CommentTarget, type InboxItem } from './core/types.ts';
 import { BiliService, describeDelivery } from './social/service.ts';
@@ -101,6 +102,8 @@ export class BiliWatchWorld implements World {
   /** 弹幕池按视频缓存（同一次会话里 probe/storyboard/zoom 共用，不重复拉）。 */
   private readonly danmakuPools = new Map<string, DanmakuPool>();
   private dmCheckAt = 0;
+  /** 陪看（一起看）：主人发起。配置读取走 getter，改配置即时生效。 */
+  private readonly coWatch: CoWatch;
 
   constructor(private readonly ctx: WorldContext<BiliWatchConfig>) {
     const dirs = ensureDirs(ctx.dataDir);
@@ -135,6 +138,37 @@ export class BiliWatchWorld implements World {
       },
     });
     this.roaming = new Roaming(() => ctx.cfg, this.store, ctx.timezone);
+    // 陪看：主人发起的场景，构造时不连任何东西（CoWatch 惰性起浏览器）
+    this.coWatch = new CoWatch({
+      dataDir: ctx.dataDir,
+      executable: () => this.cfg().watch.executable || undefined,
+      windowWidth: () => this.cfg().watch.windowWidth,
+      windowHeight: () => this.cfg().watch.windowHeight,
+      observeIntervalSec: () => this.cfg().watch.observeIntervalSec,
+      frameDensity: () => this.cfg().watch.frameDensity,
+      maxFrames: () => this.cfg().watch.maxFrames,
+      cellWidth: () => this.cfg().watch.cellWidth,
+      cellHeight: () => this.cfg().watch.cellHeight,
+      maxWatchMinutes: () => this.cfg().watch.maxWatchMinutes,
+      cookie: () => this.cookie(),
+      defer: (spec) => {
+        this.host?.pushDeferred(
+          {
+            type: spec.type,
+            source: this.id,
+            senderKey: spec.senderKey,
+            origin: 'external',
+            render: async () => {
+              const r = await spec.render();
+              if (!r) return null;
+              return { text: r.text, blobs: r.blobs };
+            },
+          },
+          { trigger: 'debounce' },
+        );
+      },
+      log: (m) => this.log(m),
+    });
     this.focusWatcher = new OwnerFocus(
       () => this.cfg(),
       this.store,
@@ -739,6 +773,7 @@ export class BiliWatchWorld implements World {
       bili_focus: (a, c) => this.focus(a, c),
       bili_dynamic: (a, c) => this.dynamic(a, c),
       bili_dm: (a, c) => this.dmTool(a, c),
+      bili_watch: (a, c) => this.watchTool(a, c),
       bili_status: (a, c) => this.status(a, c),
       bili_recommend: (a, c) => this.recommend(a, c),
     };
@@ -787,6 +822,94 @@ export class BiliWatchWorld implements World {
    * 私聊场景没有公开评论那套护栏，但有三条自己的：
    * 系统会话永远不回（官方通知，回了也没人看）、每天发送上限、同一人每天上限。
    */
+  /**
+   * 陪看（一起看）：主人发起——开一个**看得见的**浏览器窗口，鱼看同一个画面，
+   * 观察帧（拼图+字幕+弹幕）定时推给她。工具只做控制与取景，观察循环在 CoWatch。
+   */
+  private async watchTool(args: Args, callCtx: { signal?: AbortSignal }): Promise<ToolOutcome> {
+    const cfg = this.cfg();
+    if (!cfg.watch.enabled) throw new Error('陪看没开（配置页「陪看」开关）。');
+    const action = String(args.action ?? 'status');
+
+    if (action === 'status') {
+      const s = await this.coWatch.detailedStatus();
+      return {
+        text: JSON.stringify({
+          ...s,
+          提示: s.state === 'off'
+            ? '窗口没开。主人说「陪我看xxx」时用 open。'
+            : s.autoPaused
+              ? '观察已自动暂停（看太久了），窗口还开着；要继续 play，结束 exit。'
+              : '观察帧会定时推过来；主人喊你看画面用 look。',
+        }),
+      };
+    }
+
+    if (action === 'open') {
+      const input = String(args.video ?? '').trim();
+      if (!input) throw new Error('action=open 需要 video（BV 号或链接）。');
+      const r = await this.coWatch.open(input);
+      // 字幕走 HTTP（复用 getSubtitles），灌给陪看层给观察帧用
+      try {
+        const info = (await this.coWatch.detailedStatus()).video;
+        if (info?.bvid) {
+          const meta = await getVideo(this.client, info.bvid, info.p || 1, callCtx.signal);
+          const sub = await getSubtitles(this.client, meta, callCtx.signal).catch(() => null);
+          if (sub?.available) {
+            this.coWatch.setSubtitles(
+              sub.segments.map((s) => ({ from: s.from, to: s.to, content: s.text })),
+              sub.langDoc,
+            );
+          }
+        }
+      } catch {
+        /* 字幕失败不影响陪看 */
+      }
+      return {
+        text:
+          `窗口已打开：${r.title ? `《${r.title}》` : '视频'}（${clock(r.duration)}）。` +
+          '观察帧每 ' + cfg.watch.observeIntervalSec + ' 秒推一次。主人和你看的是同一个画面——' +
+          '聊你们都看得见的部分，别装作看了全片。结束用 exit。',
+      };
+    }
+
+    if (action === 'play' || action === 'pause' || action === 'seek') {
+      if (action === 'seek') {
+        const to = Number(args.to);
+        if (!Number.isFinite(to) || to < 0) throw new Error('action=seek 需要 to（秒）。');
+        await this.coWatch.seek(to);
+        return { text: `已跳到 ${clock(to)}。` };
+      }
+      if (action === 'play') await this.coWatch.play(Number(args.from) || undefined);
+      else await this.coWatch.pause();
+      return { text: action === 'play' ? '已播放。' : '已暂停。' };
+    }
+
+    if (action === 'look') {
+      return await this.coWatch.look();
+    }
+
+    if (action === 'quality') {
+      if (args.set) {
+        const active = await this.coWatch.setQuality(String(args.set));
+        return { text: `已切到 ${active.join(' / ')}。` };
+      }
+      const opts = await this.coWatch.listQuality();
+      return { text: `画质：${opts.map((q) => `${q.label}${q.active ? '（当前）' : ''}`).join(' / ') || '（读不到菜单）'}` };
+    }
+
+    if (action === 'exit') {
+      const r = await this.coWatch.exit();
+      return {
+        text:
+          `窗口已关。这轮一起看了约 ${r.watchedMin} 分钟、${r.scenes} 个观察帧。` +
+          (r.watchedMin >= 3 ? '跟主人说一声收尾（你看了什么、印象最深的是什么）。' : ''),
+      };
+    }
+
+    throw new Error(`未知 action: ${action}`);
+  }
+
   private async dmTool(args: Args, callCtx: { signal?: AbortSignal }): Promise<ToolOutcome> {
     const cfg = this.cfg();
     const action = String(args.action ?? 'list');

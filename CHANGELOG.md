@@ -10,6 +10,32 @@
 与设计初衷（主人要求按需）相悖。现改为：想不起来、要避免重复发言、或主人问起时才查；
 会话开始 / 每轮闲逛都不要主动预取。工具描述同步修正。
 
+## 0.2.0
+
+**陪看（一起看）**：主人发起——开一个**看得见的**浏览器窗口，鱼通过观察帧看同一个画面。
+按 [cortico-world-bili-video-pro](https://github.com/mutoubaicai/cortico-world-bili-video-pro)（MIT，Phantivia）
+的架构实现，puppeteer 换成插件已有的 playwright-core。设计文档：`docs/陪看设计.md`。
+
+- **浏览器层**（`src/watch/browser.ts`）：**必须 spawn 本机 Chrome/Edge**
+  （`windowsHide: false`——框架 `launch()` 在 Windows 会把窗口藏起来，主人的画面就没了），
+  `connectOverCDP` 接管；独立 user-data-dir，**绝不碰主人自己的浏览器**；
+  cookie 注入五个字段；CDP 拦 `seg.so` → 复用 `DanmakuPool`，拦 player v2 → 字幕轨。
+  支持配置 `cdpUrl` 直连已开的浏览器。
+- **抽帧在页面里做**（canvas，照搬 SAMPLE_FRAME/LOOK_FRAME）：B 站视频流不污染同源 canvas，
+  黑边裁剪（96×54 探针 + 4 帧历史）、64×36 亮度图、单格 JPEG —— Node 侧零图像依赖。
+- **观察层**（`src/watch/coWatch.ts` + 纯函数 `src/watch/capture.ts`，算法照搬）：
+  captureFps 采样进候选池 → 每 observeIntervalSec（默认 30s）投一个观察帧
+  （`pushDeferred` + debounce，主人说话不抢话）：等比回溯选 2–9 格（镜头切换吸附、
+  dHash 去重、黑场折叠）→ 页面内拼网格 → 进度 + 镜头事件 + 章节 + 分镜字幕 + 弹幕采样。
+- **工具 `bili_watch`**（18 个工具了）：status / open / play / pause / seek / look /
+  quality / exit。`look` 立刻取一张当前画面（带附近字幕弹幕）。
+- **礼仪与护栏**：**鱼不自主开窗**（主人说"陪我看xxx"才 open）；陪看开着时别闲逛；
+  `maxWatchMinutes`（默认 120）超时自动暂停观察（**窗口不关**，画面还给主人）；
+  观察帧事件显式带 ts；配置页新增「陪看」组（9 项，默认开、间隔 30s）。
+- 离线验证：选帧算法 11/11（切换吸附、最新帧必选、网格形状、连续覆盖、黑场/切换检测）；
+  三个新文件 esbuild 打包通过。**真机开窗验收**：说「陪我看 <BV号>」→ 窗口弹出并播放
+  → 观察帧约 30 秒一张 → exit 干净退出。
+
 ## 0.1.19
 
 修 zoom 弹幕与格子的错位（鱼真机测试发现：标签写「第11格 0:04-0:05」，

@@ -397,7 +397,65 @@ var BILI_WATCH_CONFIG_GROUP = {
         description: "UID \u5217\u8868\uFF0C\u9017\u53F7\u6216\u7A7A\u683C\u5206\u9694\u3002\u540D\u5355\u91CC\u7684\u4EBA\u53D1\u79C1\u4FE1**\u4E0D\u53D7\u6BCF\u65E5\u4E0A\u9650\u7EA6\u675F**\u2014\u2014\u62A4\u680F\u662F\u9632\u9A9A\u6270\u964C\u751F\u4EBA\u7684\uFF0C\u4E0D\u8BE5\u62E6\u4E3B\u4EBA\u3002**\u7559\u7A7A = \u590D\u7528\u300C\u7279\u522B\u5173\u6CE8\u300D\u7ED1\u5B9A\u7684 UID**\uFF08\u4E3B\u4EBA\u5DF2\u5728\u90A3\u8FB9\u7ED1\u8FC7\u5C31\u4E0D\u7528\u586B\uFF09\u3002",
         "x-hot": true
       },
-      /* -------------------------------------------------- 8. 动态 */
+      /* -------------------------------------------------- 8. 陪看 */
+      "worlds.bili-watch.watch.enabled": {
+        type: "boolean",
+        title: "\u542F\u7528\u966A\u770B\uFF08\u4E00\u8D77\u770B\uFF09",
+        description: "\u4E3B\u4EBA\u8BF4\u300C\u966A\u6211\u770Bxxx\u300D\u65F6\u5F00\u4E00\u4E2A\u770B\u5F97\u89C1\u7684\u6D4F\u89C8\u5668\u7A97\u53E3\uFF0C\u9C7C\u901A\u8FC7\u89C2\u5BDF\u5E27\u770B\u540C\u4E00\u4E2A\u753B\u9762\u3002**\u9C7C\u4E0D\u4F1A\u81EA\u4E3B\u5F00\u7A97**\u2014\u2014\u8FD9\u662F\u966A\u4F34\u573A\u666F\uFF0C\u7531\u4E3B\u4EBA\u53D1\u8D77\u3002",
+        "x-hot": true
+      },
+      "worlds.bili-watch.watch.executable": {
+        type: "string",
+        title: "\u966A\u770B\u6D4F\u89C8\u5668\u8DEF\u5F84",
+        description: "\u7559\u7A7A\u81EA\u52A8\u627E Chrome/Edge\u3002\u7528\u72EC\u7ACB\u914D\u7F6E\u76EE\u5F55\uFF0C\u4E0D\u4F1A\u78B0\u4F60\u81EA\u5DF1\u7684\u6D4F\u89C8\u5668\u3002"
+      },
+      "worlds.bili-watch.watch.observeIntervalSec": {
+        type: "integer",
+        title: "\u89C2\u5BDF\u5E27\u95F4\u9694\uFF08\u79D2\uFF09",
+        minimum: 2,
+        maximum: 300,
+        description: "\u6BCF\u5F20\u62FC\u56FE\u7EA6 400\u2013550 token\u300230 \u79D2 \u2248 \u6BCF\u5C0F\u65F6 5 \u4E07 token\uFF1B\u60F3\u7701\u5C31\u8C03\u5927\u3002",
+        "x-hot": true
+      },
+      "worlds.bili-watch.watch.maxFrames": {
+        type: "integer",
+        title: "\u62FC\u56FE\u683C\u6570\u4E0A\u9650",
+        minimum: 1,
+        maximum: 9,
+        "x-hot": true
+      },
+      "worlds.bili-watch.watch.cellWidth": {
+        type: "integer",
+        title: "\u5355\u683C\u5BBD\uFF08px\uFF09",
+        minimum: 160,
+        maximum: 1280
+      },
+      "worlds.bili-watch.watch.cellHeight": {
+        type: "integer",
+        title: "\u5355\u683C\u9AD8\uFF08px\uFF09",
+        minimum: 90,
+        maximum: 720
+      },
+      "worlds.bili-watch.watch.maxWatchMinutes": {
+        type: "integer",
+        title: "\u8FDE\u7EED\u89C2\u770B\u4E0A\u9650\uFF08\u5206\u949F\uFF09",
+        minimum: 0,
+        maximum: 480,
+        description: "\u8D85\u8FC7\u540E\u81EA\u52A8\u6682\u505C\u89C2\u5BDF\uFF08\u7A97\u53E3\u4E0D\u5173\uFF09\uFF0C\u9632\u65E0\u4EBA\u503C\u5B88\u70E7 token\u30020 = \u4E0D\u9650\u3002"
+      },
+      "worlds.bili-watch.watch.windowWidth": {
+        type: "integer",
+        title: "\u7A97\u53E3\u5BBD",
+        minimum: 640,
+        maximum: 3840
+      },
+      "worlds.bili-watch.watch.windowHeight": {
+        type: "integer",
+        title: "\u7A97\u53E3\u9AD8",
+        minimum: 360,
+        maximum: 2160
+      },
+      /* -------------------------------------------------- 9. 动态 */
       "worlds.bili-watch.dynamics.enabled": {
         type: "boolean",
         title: "\u542F\u7528\u52A8\u6001\uFF08\u8BFB + \u53D1\uFF09",
@@ -652,6 +710,18 @@ var BILI_WATCH_DEFAULTS = {
     maxDailySends: 20,
     maxPerPerson: 5,
     trustedUids: ""
+  },
+  watch: {
+    enabled: true,
+    executable: "",
+    windowWidth: 1280,
+    windowHeight: 720,
+    observeIntervalSec: 30,
+    frameDensity: 0.3,
+    maxFrames: 4,
+    cellWidth: 480,
+    cellHeight: 270,
+    maxWatchMinutes: 120
   },
   media: {
     mediaMaxMB: 300,
@@ -1109,6 +1179,7 @@ function sectionOf(path) {
   if (key.startsWith("focus.")) return "focus";
   if (key.startsWith("recommend.")) return "recommend";
   if (key.startsWith("dm.")) return "dm";
+  if (key.startsWith("watch.")) return "watch";
   if (key.startsWith("dynamics.")) return "dynamics";
   return "advanced";
 }
@@ -1163,6 +1234,7 @@ function mountSettings(ctx) {
     ["focus", "\u7279\u522B\u5173\u6CE8", "\u67D0\u4E2A UP \u4E3B\u7684\u65B0\u4F5C\u54C1\uFF0C\u4EE5\u53CA\u4ED6\u4F5C\u54C1\u4E0B\u503C\u5F97\u63A5\u7684\u8BC4\u8BBA\u3002", false],
     ["recommend", "\u63A8\u8350\u7ED9\u6211", "\u9C7C\u770B\u5230\u4F60\u559C\u6B22\u7684\u89C6\u9891\u65F6\u5728\u8BC4\u8BBA\u533A @ \u4F60\u3002\u6E05\u5355\u53EA\u662F\u53C2\u8003\uFF0C\u6B21\u6570\u5355\u72EC\u7B97\u3002", false],
     ["dm", "\u79C1\u4FE1", "\u6536 B \u7AD9\u79C1\u4FE1\u5E76\u56DE\u590D\u3002\u7CFB\u7EDF\u901A\u77E5\u4E0D\u56DE\uFF0C\u6BCF\u5929\u6709\u4E0A\u9650\u3002", false],
+    ["watch", "\u966A\u770B", "\u4E3B\u4EBA\u53D1\u8D77\u7684\u4E00\u8D77\u770B\uFF1A\u5171\u540C\u7A97\u53E3 + \u89C2\u5BDF\u5E27\u3002\u6CE8\u610F\u6BCF\u5E27\u7684 token \u5F00\u9500\u3002", false],
     ["dynamics", "\u52A8\u6001", "\u8BFB/\u53D1\u6587\u5B57\u52A8\u6001\uFF0C\u4EE5\u53CA\u7A7A\u95F2\u65F6\u81EA\u4E3B\u53D1\u3002", false],
     ["advanced", "\u9AD8\u7EA7", "ffmpeg \u8DEF\u5F84\u3001\u8BED\u97F3\u6A21\u578B\u7EC6\u8282\u3002\u4E00\u822C\u4E0D\u7528\u52A8\u3002", false]
   ];

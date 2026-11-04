@@ -452,7 +452,68 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
         'x-hot': true,
       },
 
-      /* -------------------------------------------------- 8. 动态 */
+      /* -------------------------------------------------- 8. 陪看 */
+      'worlds.bili-watch.watch.enabled': {
+        type: 'boolean',
+        title: '启用陪看（一起看）',
+        description:
+          '主人说「陪我看xxx」时开一个看得见的浏览器窗口，鱼通过观察帧看同一个画面。' +
+          '**鱼不会自主开窗**——这是陪伴场景，由主人发起。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.watch.executable': {
+        type: 'string',
+        title: '陪看浏览器路径',
+        description: '留空自动找 Chrome/Edge。用独立配置目录，不会碰你自己的浏览器。',
+      },
+      'worlds.bili-watch.watch.observeIntervalSec': {
+        type: 'integer',
+        title: '观察帧间隔（秒）',
+        minimum: 2,
+        maximum: 300,
+        description: '每张拼图约 400–550 token。30 秒 ≈ 每小时 5 万 token；想省就调大。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.watch.maxFrames': {
+        type: 'integer',
+        title: '拼图格数上限',
+        minimum: 1,
+        maximum: 9,
+        'x-hot': true,
+      },
+      'worlds.bili-watch.watch.cellWidth': {
+        type: 'integer',
+        title: '单格宽（px）',
+        minimum: 160,
+        maximum: 1280,
+      },
+      'worlds.bili-watch.watch.cellHeight': {
+        type: 'integer',
+        title: '单格高（px）',
+        minimum: 90,
+        maximum: 720,
+      },
+      'worlds.bili-watch.watch.maxWatchMinutes': {
+        type: 'integer',
+        title: '连续观看上限（分钟）',
+        minimum: 0,
+        maximum: 480,
+        description: '超过后自动暂停观察（窗口不关），防无人值守烧 token。0 = 不限。',
+      },
+      'worlds.bili-watch.watch.windowWidth': {
+        type: 'integer',
+        title: '窗口宽',
+        minimum: 640,
+        maximum: 3840,
+      },
+      'worlds.bili-watch.watch.windowHeight': {
+        type: 'integer',
+        title: '窗口高',
+        minimum: 360,
+        maximum: 2160,
+      },
+
+      /* -------------------------------------------------- 9. 动态 */
       'worlds.bili-watch.dynamics.enabled': {
         type: 'boolean',
         title: '启用动态（读 + 发）',

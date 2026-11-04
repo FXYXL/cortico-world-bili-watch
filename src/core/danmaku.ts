@@ -96,6 +96,32 @@ export function isWorthKeeping(content: string): boolean {
   return c.length >= 2 && c.length <= 30 && /\S/.test(c);
 }
 
+/* ---------------------------------------------------------------- 字幕 */
+
+export interface SubtitleLine {
+  from: number;
+  to: number;
+  content: string;
+}
+
+/** 解字幕文件（`{ body: [{ from, to, content }] }`，秒）；不是这个形状返回空列表。 */
+export function parseSubtitle(json: unknown): SubtitleLine[] {
+  const body = (json as { body?: unknown })?.body;
+  if (!Array.isArray(body)) return [];
+  const out: SubtitleLine[] = [];
+  for (const row of body) {
+    const r = row as { from?: unknown; to?: unknown; content?: unknown };
+    if (typeof r.from !== 'number' || typeof r.to !== 'number' || typeof r.content !== 'string') continue;
+    out.push({ from: r.from, to: r.to, content: r.content });
+  }
+  return out;
+}
+
+/** 覆盖 `(from, to]` 的字幕行。 */
+export function subtitlesBetween(lines: readonly SubtitleLine[], from: number, to: number): SubtitleLine[] {
+  return lines.filter((l) => l.to > from && l.from <= to);
+}
+
 /**
  * 全片速览：高赞弹幕 + 观众最热闹的时段。**给 probe / storyboard 用**——
  * 弹幕是氛围，概览够了；逐条的按时间窗取（zoom 场景）。
