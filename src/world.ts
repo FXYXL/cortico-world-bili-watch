@@ -1796,6 +1796,45 @@ export class BiliWatchWorld implements World {
         this.log(`roam ${action} ${r.id}`);
         return { text: JSON.stringify(r) };
       }
+      case 'history': {
+        // 「我最近看过什么、说过什么」—— 跨会话的记忆恢复。
+        // 上下文交接后鱼对之前的闲逛没有记忆，这段数据一直在 state 里，
+        // 只是以前没有工具能把它取出来（只能翻日志）。
+        const limit = Math.max(1, Math.min(20, Number(args.limit) || 5));
+        const outbox = this.store.outbox();
+        const rounds = this.store
+          .roams()
+          .filter((r) => r.status !== 'offered') // 没开始的轮次不算"看过"
+          .slice(-limit)
+          .reverse();
+        const items = rounds.map((r) => {
+          const aids = new Set((r.videos ?? []).map((v) => v.aid).filter(Boolean));
+          const said = outbox
+            .filter((o) => aids.has(o.target.oid) && o.status !== 'rejected')
+            .map((o) => ({ kind: o.kind, status: o.status, text: clean(o.text, 60) }));
+          return {
+            at: r.createdAt,
+            status: r.status,
+            searches: r.searches,
+            videos: (r.videos ?? []).map((v) => ({
+              title: v.title,
+              url: v.url,
+              commentsRead: v.commentsRead ?? 0,
+            })),
+            said,
+            ...(r.summary ? { summary: clean(r.summary, 500) } : {}),
+          };
+        });
+        return {
+          text: JSON.stringify({
+            rounds: items,
+            note:
+              '最近在前的轮次在前。summary 是你当时写给主人看的心得，said 是你在这些视频下' +
+              '发过的评论（kind: reply=回别人 / proactive=主动 / recommend=推荐给主人）。' +
+              '别在这些视频下重复发过的话。',
+          }),
+        };
+      }
       default:
         throw new Error(`未知 action: ${action}`);
     }
