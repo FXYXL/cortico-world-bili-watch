@@ -1,0 +1,25 @@
+{
+  "name": "cortico-world-bili-watch",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Cortico World：只做 B 站的社交伴侣。看视频（分镜图+逐格台词，低成本）、看评论、接楼发言、自主闲逛；带通知监听与可见性核验。",
+  "license": "MIT",
+  "author": "FXYXL",
+  "main": "./src/index.ts",
+  "engines": { "node": ">=22" },
+  "keywords": ["cortico-world", "cortico", "coopanion", "bilibili", "video", "social"],
+  "cortico": {
+    "kind": "world",
+    "api": 6,
+    "displayName": "B站伴侣",
+    "describe": "describe.json"
+  },
+  "files": ["src", "describe.json", "README.md", "CHANGELOG.md", "LICENSE"],
+  "scripts": {
+    "check": "node scripts/check-syntax.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.62.1",
+    "qrcode": "^1.5.4"
+  }
+}
