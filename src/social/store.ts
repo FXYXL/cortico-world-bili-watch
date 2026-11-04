@@ -31,6 +31,8 @@ interface State {
   dynamicReads?: Record<string, number>;
   /** 私信发送账本（3 天窗口，护栏用）。 */
   dmSends?: Array<{ at: string; talkerId: string }>;
+  /** 私信投递水位（talkerId → 已投递的最后消息时间/未读数）。**必须持久化**：内存态一重启就清零，重启后会把旧消息全推一遍。 */
+  dmWatermark?: Record<string, { lastAt: number; unread: number }>;
   focusBindings: FocusBinding[];
   focusWorks: FocusWork[];
   focusChecks: Record<string, FocusCheck>;
@@ -106,6 +108,11 @@ export class SocialStore {
         )
           throw new Error();
         if (s.dmSends !== undefined && !Array.isArray(s.dmSends)) throw new Error();
+        if (
+          s.dmWatermark !== undefined &&
+          (!s.dmWatermark || typeof s.dmWatermark !== 'object' || Array.isArray(s.dmWatermark))
+        )
+          throw new Error();
         for (const key of [
           'videos',
           'comments',
@@ -182,6 +189,21 @@ export class SocialStore {
       per.set(x.talkerId, (per.get(x.talkerId) ?? 0) + 1);
     }
     return { total, toPerson: per };
+  }
+  /** 私信投递水位（持久化，重启不丢）。 */
+  getDmWatermark(talkerId: string): { lastAt: number; unread: number } {
+    return { ...(this.state.dmWatermark?.[String(talkerId)] ?? { lastAt: 0, unread: 0 }) };
+  }
+  setDmWatermark(talkerId: string, lastAt: number, unread: number): void {
+    const map = this.state.dmWatermark ?? {};
+    const prev = map[String(talkerId)];
+    // 只前进不后退：乱序返回的会话列表不能把水位带回过去
+    map[String(talkerId)] = {
+      lastAt: Math.max(lastAt, prev?.lastAt ?? 0),
+      unread: Math.max(unread, prev?.unread ?? 0),
+    };
+    this.state.dmWatermark = map;
+    this.save();
   }
   saveDynamicPost(record: DynamicPost) {
     const rows = this.state.dynamicPosts ?? [];

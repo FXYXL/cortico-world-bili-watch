@@ -32,6 +32,8 @@ export interface DmSession {
   lastText: string;
   /** 系统通知（登录提醒、官方消息之类），不是人。 */
   system: boolean;
+  /** 最后一条是不是**自己**发的——轮询靠它过滤"自己刚说的话"，不靠时钟。 */
+  lastMine: boolean;
 }
 
 export interface DmMessage {
@@ -86,6 +88,7 @@ export async function listDmSessions(
   const raw = body?.session_list;
   if (!Array.isArray(raw)) return [];
   const items: DmSession[] = [];
+  const me = client.cookieField('DedeUserID');
   for (const entry of raw) {
     const rec = entry as Record<string, unknown>;
     const talkerId = String(rec.talker_id ?? '');
@@ -101,6 +104,7 @@ export async function listDmSessions(
       lastAt: Number(lastMsg.timestamp ?? 0) || 0,
       lastText: textOf(lastMsg.content, Number(lastMsg.msg_type ?? 1)) || '(无文字)',
       system,
+      lastMine: Boolean(me) && String(lastMsg.sender_uid ?? '') === me,
     });
   }
   items.sort((a, b) => b.lastAt - a.lastAt);

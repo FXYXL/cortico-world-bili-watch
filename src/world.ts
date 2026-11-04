@@ -100,8 +100,6 @@ export class BiliWatchWorld implements World {
   private ffprobeCheck: { at: number; ok: boolean } = { at: 0, ok: false };
   /** 弹幕池按视频缓存（同一次会话里 probe/storyboard/zoom 共用，不重复拉）。 */
   private readonly danmakuPools = new Map<string, DanmakuPool>();
-  /** 私信投递水位：talkerId → 已投递过的最后消息时间（秒）。 */
-  private readonly dmWatermark = new Map<number, number>();
   private dmCheckAt = 0;
 
   constructor(private readonly ctx: WorldContext<BiliWatchConfig>) {
@@ -858,8 +856,9 @@ export class BiliWatchWorld implements World {
       }
       const { receiptId } = await sendDm(this.client, talkerId, text, { signal: callCtx.signal });
       this.store.recordDmSend(talkerId); // 自己人也记账（只作统计，不做拦截）
-      // 发完把水位推到当前，避免轮询把这条当成"新消息"再推给自己
-      this.dmWatermark.set(Number(talkerId), Math.floor(Date.now() / 1000));
+      // **不要在这里推水位**：自己发完，会话列表的最后一条就是自己的，pollDm 靠
+      // lastMine 过滤（不看时钟）；在这里用本地时钟推水位反而会因时钟偏差
+      // 把主人随后真正的回复判成"旧的"而漏推。
       const left = trusted.has(talkerId)
         ? '不限（自己人）'
         : `${Math.max(0, cfg.dm.maxDailySends - this.store.dmSendsToday().total)} 条`;
@@ -874,7 +873,12 @@ export class BiliWatchWorld implements World {
   /**
    * 私信轮询：发现新消息推 `bili.dm` 事件。
    *
-   * 水位按会话记「已投递过的最后消息时间」，同一会话只投一次；
+   * 防重有两道，缺一不可：
+   * 1. **水位持久化在 store**（`dmWatermark`）——内存态一重启就清零，重启后会把
+   *    旧会话全推一遍，鱼就看到"我自己说的话被当成新消息推回来"。
+   * 2. **`lastMine` 按发送者过滤**——会话列表的最后一条是**自己**发的就直接跳过，
+   *    不依赖时钟对齐（本地 `Date.now()` 和 B 站服务器时间戳有偏差）。
+   *
    * 系统通知会话（登录提醒、官方消息）**不投**——那是噪音，不是有人找鱼。
    */
   private async pollDm(): Promise<void> {
@@ -886,11 +890,15 @@ export class BiliWatchWorld implements World {
     if (!sessions) return;
     for (const s of sessions) {
       if (s.system) continue;
-      const seen = this.dmWatermark.get(Number(s.talkerId)) ?? 0;
-      if (!s.unread && s.lastAt <= seen) continue;
-      const fresh = s.lastAt > seen;
-      this.dmWatermark.set(Number(s.talkerId), Math.max(s.lastAt, seen));
-      if (!fresh && !s.unread) continue;
+      const seen = this.store.getDmWatermark(s.talkerId);
+      // 自己发的最后一条：更新水位但绝不推——不管时钟偏差多少
+      if (s.lastMine) {
+        this.store.setDmWatermark(s.talkerId, s.lastAt, s.unread);
+        continue;
+      }
+      const fresh = s.lastAt > seen.lastAt || s.unread > seen.unread;
+      if (!fresh) continue;
+      this.store.setDmWatermark(s.talkerId, s.lastAt, s.unread);
       const who = this.contactName(s.talkerId);
       await this.host?.pushEvent({
         type: 'bili.dm',
