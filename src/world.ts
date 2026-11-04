@@ -141,15 +141,23 @@ export class BiliWatchWorld implements World {
     // 陪看：主人发起的场景，构造时不连任何东西（CoWatch 惰性起浏览器）
     this.coWatch = new CoWatch({
       dataDir: ctx.dataDir,
-      executable: () => this.cfg().watch.executable || undefined,
-      windowWidth: () => this.cfg().watch.windowWidth,
-      windowHeight: () => this.cfg().watch.windowHeight,
-      observeIntervalSec: () => this.cfg().watch.observeIntervalSec,
-      frameDensity: () => this.cfg().watch.frameDensity,
-      maxFrames: () => this.cfg().watch.maxFrames,
-      cellWidth: () => this.cfg().watch.cellWidth,
-      cellHeight: () => this.cfg().watch.cellHeight,
-      maxWatchMinutes: () => this.cfg().watch.maxWatchMinutes,
+      // 观察参数每次使用现取快照：改配置即时生效，不用重启 World
+      config: () => ({
+        executable: this.cfg().watch.executable || undefined,
+        windowWidth: this.cfg().watch.windowWidth,
+        windowHeight: this.cfg().watch.windowHeight,
+        observeIntervalSec: this.cfg().watch.observeIntervalSec,
+        frameDensity: this.cfg().watch.frameDensity,
+        maxFrames: this.cfg().watch.maxFrames,
+        cellWidth: this.cfg().watch.cellWidth,
+        cellHeight: this.cfg().watch.cellHeight,
+        jpegQuality: 0.72,
+        dedupeHamming: 8,
+        cutThreshold: 40,
+        blackLuma: 24,
+        captureFps: 1,
+        maxWatchMinutes: this.cfg().watch.maxWatchMinutes,
+      }),
       cookie: () => this.cookie(),
       defer: (spec) => {
         this.host?.pushDeferred(
