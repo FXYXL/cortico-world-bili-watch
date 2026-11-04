@@ -5,6 +5,14 @@
   "description": "Cortico World：只做 B 站的社交伴侣。看视频（分镜图+逐格台词，低成本）、看评论、接楼发言、自主闲逛；带通知监听与可见性核验。",
   "license": "MIT",
   "author": "FXYXL",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FXYXL/cortico-world-bili-watch.git"
+  },
+  "homepage": "https://github.com/FXYXL/cortico-world-bili-watch#readme",
+  "bugs": {
+    "url": "https://github.com/FXYXL/cortico-world-bili-watch/issues"
+  },
   "main": "./src/index.ts",
   "engines": {
     "node": ">=22"
