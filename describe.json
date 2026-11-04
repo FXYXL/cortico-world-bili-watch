@@ -15,6 +15,10 @@
             "type": "integer",
             "minimum": 1,
             "description": "Bilibili part (分P) number. Default 1. Ignored for local files."
+          },
+          "roamId": {
+            "type": "string",
+            "description": "Required for EVERY autonomous roaming action. Use the id from bili_roam status / the offer event. Finish the current step and yield when a new message arrives."
           }
         },
         "required": [
@@ -145,6 +149,10 @@
           "transcriptFile": {
             "type": "string",
             "description": "Absolute path to an existing transcript (SRT or JSON) to skip the subtitle track / ASR."
+          },
+          "roamId": {
+            "type": "string",
+            "description": "Required for EVERY autonomous roaming action. Use the id from bili_roam status / the offer event. Finish the current step and yield when a new message arrives."
           }
         },
         "required": [
@@ -222,6 +230,10 @@
           "transcriptFile": {
             "type": "string",
             "description": "Absolute path to an existing transcript."
+          },
+          "roamId": {
+            "type": "string",
+            "description": "Required for EVERY autonomous roaming action. Use the id from bili_roam status / the offer event. Finish the current step and yield when a new message arrives."
           }
         },
         "required": [
@@ -326,6 +338,10 @@
               "type": "number"
             },
             "description": "Subtitle band as [y0, y1], fractions of frame height. Default 0.82-0.98 (bottom 16%). Tune it from what you SEE: text clipped at the top means lower y0."
+          },
+          "roamId": {
+            "type": "string",
+            "description": "Required for EVERY autonomous roaming action. Use the id from bili_roam status / the offer event. Finish the current step and yield when a new message arrives."
           }
         },
         "required": [

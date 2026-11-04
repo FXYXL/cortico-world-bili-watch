@@ -69,7 +69,7 @@ const readTools = [
     parameters: {
       type: 'object',
       additionalProperties: false,
-      properties: { video, part },
+      properties: { video, part, roamId },
       required: ['video'],
     },
   },
@@ -176,6 +176,7 @@ const readTools = [
           type: 'string',
           description: 'Absolute path to an existing transcript (SRT or JSON) to skip the subtitle track / ASR.',
         },
+        roamId,
       },
       required: ['video'],
     },
@@ -225,6 +226,7 @@ const readTools = [
           additionalProperties: false,
         },
         transcriptFile: { type: 'string', description: 'Absolute path to an existing transcript.' },
+        roamId,
       },
       required: ['video'],
     },
@@ -293,6 +295,7 @@ const readTools = [
             'Subtitle band as [y0, y1], fractions of frame height. Default 0.82-0.98 (bottom 16%). ' +
             'Tune it from what you SEE: text clipped at the top means lower y0.',
         },
+        roamId,
       },
       required: ['video'],
     },

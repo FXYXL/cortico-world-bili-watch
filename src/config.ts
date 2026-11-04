@@ -101,7 +101,15 @@ export const REPLY_PRESETS = { light: 40, balanced: 80, active: 120 } as const;
 export const MAX_REPLIES_PER_PERSON = 5;
 
 /** 配置里存的 secret 名（部署 `.env`）。默认沿用社交视窗那份，**只读不写**。 */
-export const DEFAULT_COOKIE_SECRET = 'SOCIALMEDIA_BILIBILI_COOKIE';
+export const BILI_WATCH_SECRET = 'BILI_WATCH_COOKIE';
+/**
+ * 默认读**自己的** secret。
+ *
+ * 过渡期可以把它改成 `SOCIALMEDIA_BILIBILI_COOKIE` —— 那样就不用重新扫码，
+ * 直接复用社交视窗已经存下的登录（**只读，绝不写**）。
+ * 但社交视窗一旦卸载，那个值就没人维护了，所以新装的人应该用默认值。
+ */
+export const DEFAULT_COOKIE_SECRET = BILI_WATCH_SECRET;
 
 /** World id。**一旦发布就不能改** —— 改了用户的配置段会失效。 */
 export const BILI_WATCH_ID = 'bili-watch';

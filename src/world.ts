@@ -46,7 +46,7 @@ import { resolveSource } from './read/source.ts';
 import { formatBiliProbe, formatLocalProbe, clock } from './read/probe-text.ts';
 import { resolveAsrConfig } from './read/asr.ts';
 import { applyEngineEnv, loadEngine, type Engine } from './engine/load.js';
-import { worldDirs } from './paths.ts';
+import { ensureDirs, worldDirs } from './paths.ts';
 import { buildTimeline } from './webui/data.ts';
 
 const ENV_PROMPT_PATH = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
@@ -83,8 +83,7 @@ export class BiliWatchWorld implements World {
   private ffprobeCheck: { at: number; ok: boolean } = { at: 0, ok: false };
 
   constructor(private readonly ctx: WorldContext<BiliWatchConfig>) {
-    const dirs = worldDirs(ctx.dataDir);
-    mkdirSync(dirs.state, { recursive: true });
+    const dirs = ensureDirs(ctx.dataDir);
     this.store = new SocialStore(dirs.state, () => ({}));
     this.client = new BiliClient({
       cookie: () => this.cookie(),
@@ -160,7 +159,7 @@ export class BiliWatchWorld implements World {
       }
       const dirs = worldDirs(this.ctx.dataDir);
       this.browserSender = new mod.BilibiliBrowserSender(
-        join(dirs.root, 'browser-profile'),
+        dirs.browserProfile,
         () => this.cookie(),
         (c) => this.saveCookie(c),
         () => String((this.cfg() as any).browser?.executableFile ?? ''),
@@ -431,6 +430,8 @@ export class BiliWatchWorld implements World {
       ]);
 
       // 音频画像只在**本机已有副本**时做：probe 承诺不下载
+      this.noteRoamVideo(args, meta);
+
       let audio: { kind: string; text: string } | null = null;
       try {
         const engine = await this.engine();
@@ -496,6 +497,7 @@ export class BiliWatchWorld implements World {
     if (!textOnly) this.assertReadQuota();
 
     const src = await this.prepareSource(args, engine, false, callCtx);
+    if (src.meta) this.noteRoamVideo(args, src.meta);
     const duration = src.meta ? src.meta.durationSec : await this.localDuration(src, engine);
 
     const explicitWindow = args.from !== undefined || args.to !== undefined || Number(args.segment) > 0;
@@ -568,6 +570,7 @@ export class BiliWatchWorld implements World {
 
     const fromStream = cfg.read.zoomFromStream !== false;
     const src = await this.prepareSource(args, engine, fromStream, callCtx);
+    if (src.meta) this.noteRoamVideo(args, src.meta);
 
     let from = args.from;
     let to = args.to;
@@ -680,6 +683,7 @@ export class BiliWatchWorld implements World {
     this.assertReadQuota();
 
     const src = await this.prepareSource(args, engine, false, callCtx);
+    if (src.meta) this.noteRoamVideo(args, src.meta);
     const part = Number(args.part ?? 1) || 1;
 
     /**
@@ -771,6 +775,42 @@ export class BiliWatchWorld implements World {
     const dirs = worldDirs(this.ctx.dataDir);
     const state = readUsage(dirs.state);
     writeUsage(dirs.state, { ...state, deliveredBytes: state.deliveredBytes + bytes, day: todayKey(this.ctx.timezone) });
+  }
+
+  /**
+   * 闲逛时读了一个视频 —— **记下来**。
+   *
+   * 这是「闲逛记录」的核心：鱼自己看的东西必须能被追溯，
+   * 否则面板上只有一句 summary，主人不知道它到底看了什么，
+   * 它自己下一轮也想不起来"之前看过这条"。
+   *
+   * 三件事：
+   *   1. 检查本轮视频配额（超了抛错，让模型知道该收尾）
+   *   2. 记进 `roams[].videos`（含 title/url，面板直接显示）
+   *   3. 顺手归档到视频表 —— 这样「视频与对话」里能看到它读过什么
+   *
+   * **没有 roamId 时什么都不做**：主人直接让它看视频不算闲逛。
+   */
+  private noteRoamVideo(args: Args, meta: { id: string; aid: string; title: string; url: string }): void {
+    const roamId = typeof args.roamId === 'string' ? args.roamId.trim() : '';
+    if (!roamId) return;
+    try {
+      this.roaming.recordVideo(roamId, meta);
+      // 归档：面板的作品卡需要标题，否则只能显示"作品 12345"
+      this.store.rememberVideo({
+        id: meta.id,
+        aid: meta.aid,
+        title: meta.title,
+        url: meta.url,
+      }, '闲逛时读过');
+    } catch (error) {
+      const msg = (error as Error).message;
+      // 配额超了要抛出去（这是给模型的信号），其它错误只记日志
+      if (/预算/.test(msg)) throw error;
+      this.log(
+        'noteRoamVideo failed: ' + msg,
+      );
+    }
   }
 
   /** 当前分P的时长。**不是整支视频的时长** —— 分P视频这两者差很多。 */
@@ -1442,6 +1482,54 @@ export class BiliWatchWorld implements World {
   /* ------------------------------------------------------------ WebUI */
 
   /**
+   * 生成登录二维码。
+   *
+   * 二维码要**渲染成图片**才能扫 —— 用 `qrcode` 包转成 data URL，
+   * 前端 `<img src>` 直接显示。返回的 `key` 是轮询凭据，**不要展示给用户**。
+   *
+   * 登录成功后 cookie 存进**本插件自己的 secret**（配置里那一个）。
+   * ⚠ 如果配置指向社交视窗的 secret，这里会**拒绝写入** ——
+   * 覆盖它会换掉社交视窗的账号绑定，它的历史发言会突然不属于当前账号。
+   */
+  private async qrStart(): Promise<{ image: string; key: string }> {
+    const { url, key } = await this.client.qrGenerate();
+    let image = '';
+    try {
+      const mod: any = await import('qrcode');
+      image = await (mod.default ?? mod).toDataURL(url, { margin: 1, width: 220 });
+    } catch {
+      // qrcode 没装：至少把链接给出来，用户可以用手机扫别的屏幕
+      image = '';
+    }
+    return { image, key };
+  }
+
+  /** 轮询扫码结果；成功时把 cookie 存进自己的 secret。 */
+  private async qrPoll(key: string): Promise<Record<string, unknown>> {
+    if (!key) return { status: 'error', message: '缺少二维码凭据，请重新生成。' };
+    const r = await this.client.qrPoll(key);
+    if (r.status === 'success' && r.cookie) {
+      const cfg = this.cfg();
+      if (!cfg.cookieSecret || cfg.cookieSecret === 'SOCIALMEDIA_BILIBILI_COOKIE') {
+        return {
+          status: 'error',
+          message:
+            '登录成功了，但当前「登录来源」指向的是社交视窗的密钥，本插件**不会覆盖它**。' +
+            '请先把「登录来源」改成 BILI_WATCH_COOKIE，再扫一次。',
+        };
+      }
+      try {
+        this.ctx.storeSecret(cfg.cookieSecret, r.cookie);
+        this.service.disconnect();
+      } catch (e) {
+        return { status: 'error', message: `保存登录失败：${(e as Error).message}` };
+      }
+      return { status: 'success' };
+    }
+    return { status: r.status };
+  }
+
+  /**
    * 自定义面板的数据面。
    *
    * 前端只摆数据、不做判断 —— 谁是待回应、哪条已发出，全在这里算。
@@ -1495,6 +1583,23 @@ export class BiliWatchWorld implements World {
           .then(() => undefined)
           .catch(() => undefined);
         return { started: true, note: '正在核验，几秒后刷新看结果。' };
+      }
+      case 'qr-start': {
+        // 生成二维码。**返回 data URL**，前端直接 <img src> 显示，不需要额外路由。
+        return this.qrStart().catch((e) => ({ error: (e as Error).message }));
+      }
+      case 'qr-poll': {
+        const key = String(args[0] ?? '');
+        return this.qrPoll(key).catch((e) => ({ error: (e as Error).message }));
+      }
+      case 'logout': {
+        try {
+          this.ctx.storeSecret(this.cfg().cookieSecret || 'BILI_WATCH_COOKIE', '');
+          this.service.disconnect();
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: (e as Error).message };
+        }
       }
       case 'sync': {
         this.service

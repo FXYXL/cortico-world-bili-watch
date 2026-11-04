@@ -82,6 +82,12 @@ const CSS = `
 .bl-foot { display:flex; flex-wrap:wrap; gap:10px; align-items:center; font-size:12px; opacity:.65; }
 .bl-roam { display:flex; flex-direction:column; gap:4px; font-size:12px; opacity:.7;
   border-top:1px solid rgba(128,128,128,.22); padding-top:10px; }
+
+.bl-login { display:flex; flex-direction:column; gap:10px; align-items:center;
+  border:1px solid rgba(128,128,128,.28); border-radius:14px; padding:14px; }
+.bl-login img { border-radius:10px; background:#fff; padding:6px; display:block; }
+.bl-login-note { font-size:12px; opacity:.75; text-align:center; line-height:1.5; }
+.bl-login-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center; }
 `;
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, cls?: string) => {
@@ -257,6 +263,10 @@ export async function mount(ctx: WebUiPanelContext): Promise<void> {
   bar.append(syncBtn);
   desk.append(bar);
 
+  // 登录区（未登录时才显示）
+  const login = el('div', undefined, 'bl-login');
+  desk.append(login);
+
   // 卡片列表
   const list = el('div', undefined, 'bl-list');
   desk.append(list);
@@ -289,6 +299,70 @@ export async function mount(ctx: WebUiPanelContext): Promise<void> {
     head.append(chip(s.posting ? (s.transport === 'browser' ? '可发评（网页）' : '可发评（接口）') : '发评关', s.posting ? 'on' : 'off'));
     head.append(chip(`待回应 ${snap.usage.pending}`, snap.usage.pending > 0 ? 'warn' : 'off'));
     if (s.lastError) head.append(chip(`错误：${s.lastError.slice(0, 60)}`, 'bad'));
+
+    // 未登录时把扫码区摆出来
+    login.textContent = '';
+    if (!s.login) {
+      const note = el(
+        'div',
+        '未登录时只能拿低清晰度、多半也没字幕。用手机 B站 App 扫这个码：',
+        'bl-login-note',
+      );
+      login.append(note);
+      const imgBox = el('div');
+      login.append(imgBox);
+      const row = el('div', undefined, 'bl-login-row');
+      const btn = el('button', '获取二维码', 'bl-btn');
+      const status = el('span', '');
+      row.append(btn, status);
+      login.append(row);
+
+      let pollTimer: ReturnType<typeof setInterval> | null = null;
+      btn.addEventListener('click', () => {
+        btn.setAttribute('disabled', 'true');
+        status.textContent = '正在生成…';
+        void ctx
+          .invoke<any>('qr-start')
+          .then((r) => {
+            if (!r || r.error) {
+              status.textContent = `失败：${r?.error ?? '未知错误'}`;
+              return;
+            }
+            imgBox.textContent = '';
+            if (r.image) {
+              const im = el('img') as HTMLImageElement;
+              im.src = r.image;
+              im.alt = 'B站登录二维码';
+              imgBox.append(im);
+            } else {
+              imgBox.append(el('div', '（二维码组件没装，可改用配置里的登录来源）', 'bl-login-note'));
+            }
+            status.textContent = '等待扫码…';
+            if (pollTimer) clearInterval(pollTimer);
+            pollTimer = setInterval(() => {
+              void ctx.invoke<any>('qr-poll', [r.key]).then((p) => {
+                if (!p) return;
+                if (p.status === 'success') {
+                  status.textContent = '登录成功！正在刷新…';
+                  if (pollTimer) clearInterval(pollTimer);
+                  setTimeout(() => void load(), 800);
+                } else if (p.status === 'scanned') {
+                  status.textContent = '已扫码，请在手机上确认';
+                } else if (p.status === 'expired') {
+                  status.textContent = '二维码过期了，重新获取';
+                  if (pollTimer) clearInterval(pollTimer);
+                  btn.removeAttribute('disabled');
+                } else if (p.status === 'error') {
+                  status.textContent = String(p.message ?? '出错了');
+                  if (pollTimer) clearInterval(pollTimer);
+                  btn.removeAttribute('disabled');
+                }
+              });
+            }, 2000) as any;
+          })
+          .finally(() => btn.removeAttribute('disabled'));
+      });
+    }
 
     // 卡片
     list.textContent = '';

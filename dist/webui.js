@@ -60,6 +60,12 @@ var CSS = `
 .bl-foot { display:flex; flex-wrap:wrap; gap:10px; align-items:center; font-size:12px; opacity:.65; }
 .bl-roam { display:flex; flex-direction:column; gap:4px; font-size:12px; opacity:.7;
   border-top:1px solid rgba(128,128,128,.22); padding-top:10px; }
+
+.bl-login { display:flex; flex-direction:column; gap:10px; align-items:center;
+  border:1px solid rgba(128,128,128,.28); border-radius:14px; padding:14px; }
+.bl-login img { border-radius:10px; background:#fff; padding:6px; display:block; }
+.bl-login-note { font-size:12px; opacity:.75; text-align:center; line-height:1.5; }
+.bl-login-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center; }
 `;
 var el = (tag, text, cls) => {
   const n = document.createElement(tag);
@@ -218,6 +224,8 @@ async function mount(ctx) {
   });
   bar.append(syncBtn);
   desk.append(bar);
+  const login = el("div", void 0, "bl-login");
+  desk.append(login);
   const list = el("div", void 0, "bl-list");
   desk.append(list);
   const foot = el("div", void 0, "bl-roam");
@@ -244,6 +252,64 @@ async function mount(ctx) {
     head.append(chip(s.posting ? s.transport === "browser" ? "\u53EF\u53D1\u8BC4\uFF08\u7F51\u9875\uFF09" : "\u53EF\u53D1\u8BC4\uFF08\u63A5\u53E3\uFF09" : "\u53D1\u8BC4\u5173", s.posting ? "on" : "off"));
     head.append(chip(`\u5F85\u56DE\u5E94 ${snap.usage.pending}`, snap.usage.pending > 0 ? "warn" : "off"));
     if (s.lastError) head.append(chip(`\u9519\u8BEF\uFF1A${s.lastError.slice(0, 60)}`, "bad"));
+    login.textContent = "";
+    if (!s.login) {
+      const note = el(
+        "div",
+        "\u672A\u767B\u5F55\u65F6\u53EA\u80FD\u62FF\u4F4E\u6E05\u6670\u5EA6\u3001\u591A\u534A\u4E5F\u6CA1\u5B57\u5E55\u3002\u7528\u624B\u673A B\u7AD9 App \u626B\u8FD9\u4E2A\u7801\uFF1A",
+        "bl-login-note"
+      );
+      login.append(note);
+      const imgBox = el("div");
+      login.append(imgBox);
+      const row = el("div", void 0, "bl-login-row");
+      const btn = el("button", "\u83B7\u53D6\u4E8C\u7EF4\u7801", "bl-btn");
+      const status = el("span", "");
+      row.append(btn, status);
+      login.append(row);
+      let pollTimer = null;
+      btn.addEventListener("click", () => {
+        btn.setAttribute("disabled", "true");
+        status.textContent = "\u6B63\u5728\u751F\u6210\u2026";
+        void ctx.invoke("qr-start").then((r) => {
+          if (!r || r.error) {
+            status.textContent = `\u5931\u8D25\uFF1A${r?.error ?? "\u672A\u77E5\u9519\u8BEF"}`;
+            return;
+          }
+          imgBox.textContent = "";
+          if (r.image) {
+            const im = el("img");
+            im.src = r.image;
+            im.alt = "B\u7AD9\u767B\u5F55\u4E8C\u7EF4\u7801";
+            imgBox.append(im);
+          } else {
+            imgBox.append(el("div", "\uFF08\u4E8C\u7EF4\u7801\u7EC4\u4EF6\u6CA1\u88C5\uFF0C\u53EF\u6539\u7528\u914D\u7F6E\u91CC\u7684\u767B\u5F55\u6765\u6E90\uFF09", "bl-login-note"));
+          }
+          status.textContent = "\u7B49\u5F85\u626B\u7801\u2026";
+          if (pollTimer) clearInterval(pollTimer);
+          pollTimer = setInterval(() => {
+            void ctx.invoke("qr-poll", [r.key]).then((p) => {
+              if (!p) return;
+              if (p.status === "success") {
+                status.textContent = "\u767B\u5F55\u6210\u529F\uFF01\u6B63\u5728\u5237\u65B0\u2026";
+                if (pollTimer) clearInterval(pollTimer);
+                setTimeout(() => void load(), 800);
+              } else if (p.status === "scanned") {
+                status.textContent = "\u5DF2\u626B\u7801\uFF0C\u8BF7\u5728\u624B\u673A\u4E0A\u786E\u8BA4";
+              } else if (p.status === "expired") {
+                status.textContent = "\u4E8C\u7EF4\u7801\u8FC7\u671F\u4E86\uFF0C\u91CD\u65B0\u83B7\u53D6";
+                if (pollTimer) clearInterval(pollTimer);
+                btn.removeAttribute("disabled");
+              } else if (p.status === "error") {
+                status.textContent = String(p.message ?? "\u51FA\u9519\u4E86");
+                if (pollTimer) clearInterval(pollTimer);
+                btn.removeAttribute("disabled");
+              }
+            });
+          }, 2e3);
+        }).finally(() => btn.removeAttribute("disabled"));
+      });
+    }
     list.textContent = "";
     if (!snap.cards.length) {
       list.append(

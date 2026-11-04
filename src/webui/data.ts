@@ -137,6 +137,9 @@ export function buildTimeline(
       if (e.pending) c.counts.pending += 1;
     } else if (e.kind === 'sent') {
       c.counts.sent += 1;
+    } else if (e.kind === 'roam') {
+      // 闲逛读过也要计数，否则「闲逛」筛选永远是空的
+      c.counts.roam += 1;
     }
     const t = typeof e.at === 'number' ? e.at : Date.parse(String(e.at)) || 0;
     if (t > (typeof c.lastAt === 'number' ? c.lastAt : 0)) c.lastAt = t;
