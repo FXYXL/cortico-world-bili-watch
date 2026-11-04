@@ -1474,18 +1474,25 @@ export class BiliWatchWorld implements World {
         const pool = await this.danmakuFor(src.meta, undefined);
         if (pool) {
           if (o.kind === 'zoom' && Array.isArray(result?.sheets) && result.sheets.length) {
+            // 格子标签的时间是取整的（标签写 0:04-0:05，实际抽帧内容可能是 0:03.9-0:05.1），
+            // 弹幕窗口相应放宽 ±1 秒；边界弹幕归属先到先得（跨格去重），避免同一条挂两格。
+            const PAD_SEC = 1;
+            const used = new Set<string>();
             const rows: string[] = [];
             for (const sheet of result.sheets) {
               const cells: Array<{ i: number; t_start: number; t_end: number }> = sheet.cells ?? [];
               for (const cell of cells) {
                 if (o.cellRange && !o.cellRange.includes(Number(cell.i))) continue;
                 const dm: Danmaku[] = spreadList(
-                  pool.between(Number(cell.t_start), Number(cell.t_end)).filter((d) => d.mode !== 8),
+                  pool
+                    .between(Number(cell.t_start) - PAD_SEC, Number(cell.t_end) + PAD_SEC)
+                    .filter((d) => d.mode !== 8 && !used.has(d.id)),
                   5,
                 );
+                for (const d of dm) used.add(d.id);
                 if (dm.length) {
                   rows.push(
-                    `  第${cell.i}格 ${clock(Number(cell.t_start))}-${clock(Number(cell.t_end))}：` +
+                    `  第${cell.i}格 ${clock(Number(cell.t_start))}-${clock(Number(cell.t_end))}（窗口含前后 1 秒）：` +
                     dm.map((d) => d.content).join(' ／ '),
                   );
                 }
