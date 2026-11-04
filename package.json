@@ -6,17 +6,37 @@
   "license": "MIT",
   "author": "FXYXL",
   "main": "./src/index.ts",
-  "engines": { "node": ">=22" },
-  "keywords": ["cortico-world", "cortico", "coopanion", "bilibili", "video", "social"],
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "cortico-world",
+    "cortico",
+    "coopanion",
+    "bilibili",
+    "video",
+    "social"
+  ],
   "cortico": {
     "kind": "world",
     "api": 6,
     "displayName": "B站伴侣",
-    "describe": "describe.json"
+    "describe": "describe.json",
+    "webUiClient": "dist/webui.js"
   },
-  "files": ["src", "describe.json", "README.md", "CHANGELOG.md", "LICENSE"],
+  "files": [
+    "src",
+    "dist",
+    "scripts",
+    "describe.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "check": "node scripts/check-syntax.mjs"
+    "check": "node scripts/check-syntax.mjs",
+    "build:webui": "node scripts/build-webui.mjs",
+    "prepack": "node scripts/build-webui.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.62.1",

@@ -42,6 +42,7 @@ import { formatBiliProbe, formatLocalProbe, clock } from './read/probe-text.ts';
 import { resolveAsrConfig } from './read/asr.ts';
 import { applyEngineEnv, loadEngine, type Engine } from './engine/load.js';
 import { worldDirs } from './paths.ts';
+import { buildTimeline } from './webui/data.ts';
 
 const ENV_PROMPT_PATH = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
 
@@ -1261,6 +1262,98 @@ export class BiliWatchWorld implements World {
 
   /* ------------------------------------------------------------ WebUI */
 
+  /**
+   * 自定义面板的数据面。
+   *
+   * 前端只摆数据、不做判断 —— 谁是待回应、哪条已发出，全在这里算。
+   * 这样"界面上看到的"和"实际记录的"永远一致。
+   */
+  private panelInvoke(method: string, args: unknown[]): unknown {
+    const cfg = this.cfg();
+    const roaming = this.roaming.status();
+    const acc = this.service.currentAccount;
+
+    const usage = {
+      pending: this.service.pendingReplies().length,
+      sentToday: this.store.outbox().filter((r) => r.status !== 'rejected').length,
+      sentLimit: cfg.posting.maxDailyComments,
+      roamToday: roaming.usedToday,
+      roamLimit: roaming.limits.maxDailySessions,
+      repliesToday: 0,
+      repliesLimit: cfg.posting.maxDailyReplies,
+    };
+
+    const state = {
+      login: Boolean(this.cookie()),
+      account: acc?.name ?? null,
+      monitor: cfg.monitor.enabled,
+      lastError: this.lastError,
+      lastPollAt: this.service.lastPoll,
+      posting: cfg.posting.enabled,
+      transport: cfg.posting.transport,
+      roaming: roaming.enabled,
+      roamingActive: roaming.active ? roaming.active.id : null,
+    };
+
+    switch (method) {
+      case 'timeline': {
+        const o = (args[0] ?? {}) as { filter?: string; query?: string; limit?: number };
+        return buildTimeline(this.store, {
+          filter: (o.filter as any) ?? 'all',
+          query: o.query ?? '',
+          limit: Number(o.limit) || 40,
+          usage,
+          state,
+          roamingRecent: roaming.recent,
+        });
+      }
+      case 'status':
+        return { usage, state, roaming };
+      case 'check-login': {
+        // 前端点「核验登录」时跑一次真实请求
+        this.service
+          .connect()
+          .then(() => undefined)
+          .catch(() => undefined);
+        return { started: true, note: '正在核验，几秒后刷新看结果。' };
+      }
+      case 'sync': {
+        this.service
+          .poll(undefined, true)
+          .catch((e) => this.log(`manual sync failed: ${(e as Error).message}`));
+        return { started: true, note: '正在同步通知。' };
+      }
+      case 'handled': {
+        const id = String(args[0] ?? '');
+        this.service.handleInbox(id);
+        return { ok: true };
+      }
+      case 'defer': {
+        const id = String(args[0] ?? '');
+        const minutes = Number(args[1]) || 30;
+        this.service.deferInbox(id, minutes);
+        return { ok: true, minutes };
+      }
+      case 'verify': {
+        const id = String(args[0] ?? '');
+        return this.service
+          .verify(id)
+          .then((r) => ({ ok: Boolean(r), visibility: r?.visibility ?? null }));
+      }
+      case 'open': {
+        const bvid = String(args[0] ?? '');
+        if (!/^BV[0-9A-Za-z]{10}$/.test(bvid)) return { ok: false, reason: '不是 BV 号' };
+        return { ok: true, url: `https://www.bilibili.com/video/${bvid}` };
+      }
+      case 'clear-records': {
+        rmSync(join(worldDirs(this.ctx.dataDir).state, 'state.json'), { force: true });
+        return { ok: true };
+      }
+      default:
+        throw new Error(`未知方法: ${method}`);
+    }
+  }
+
   webUi(language: Language = 'zh'): WorldWebUiDecl {
     const en = language !== 'zh';
     const cfg = this.cfg();
@@ -1312,6 +1405,19 @@ export class BiliWatchWorld implements World {
           ],
         },
       ],
+      panels: [
+        {
+          id: 'desk',
+          title: en ? 'Videos & conversation' : '视频与对话',
+          description: en
+            ? 'Interactions grouped by video. Expand a card to read the thread.'
+            : '按作品收好每一次互动。点开一条视频，看这里的完整交流。',
+        },
+      ],
+      invoke: (async (panel: string, method: string, args: unknown[]) => {
+        if (panel !== 'desk') throw new Error('面板不存在');
+        return this.panelInvoke(method, args ?? []);
+      }) as WorldWebUiDecl['invoke'],
       storage: [
         {
           key: 'records',
