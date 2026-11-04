@@ -103,6 +103,9 @@ export const MAX_REPLIES_PER_PERSON = 5;
 /** 配置里存的 secret 名（部署 `.env`）。默认沿用社交视窗那份，**只读不写**。 */
 export const DEFAULT_COOKIE_SECRET = 'SOCIALMEDIA_BILIBILI_COOKIE';
 
+/** World id。**一旦发布就不能改** —— 改了用户的配置段会失效。 */
+export const BILI_WATCH_ID = 'bili-watch';
+
 export interface FocusConfig {
   /** 特别关注开关。 */
   enabled: boolean;
