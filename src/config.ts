@@ -1,10 +1,9 @@
 /**
  * config.ts — 本插件唯一的配置来源。
  *
- * ## 和社交视窗的关系
+ * ## 结构
  *
- * 结构**照搬**它的逻辑（分档预设 + 逐项可调），但去掉 `platforms` 那一层 ——
- * 只做 B 站，就不需要 `platforms.bilibili.enabled` 这种路径。
+ * 分档预设 + 逐项可调。只做 B 站，所以没有 `platforms.*` 那一层路径。
  *
  * 三个新增（用户 2026-11-04 拍板）：
  *   1. **动态**（读 + 发）
@@ -15,7 +14,7 @@
  *
  * 实测证明散参数会让人调到互相矛盾：把"每日发言"调到 50，却把"同一人上限"留在 5，
  * 结果是大部分额度用不出去。四档预设是**按比例**配好的一组数，选一档就对。
- * 想微调再改单项 —— 这也是社交视窗的做法，用户满意的那套。
+ * 想微调再改单项，预设只负责给出一组不自相矛盾的起点。
  */
 
 /** 闲逛参数。四档预设 + 可逐项覆盖。 */
@@ -39,7 +38,7 @@ export interface RoamingConfig {
 }
 
 /**
- * 四档预设。**参数原样照搬社交视窗**（用户已认可这组数）。
+ * 四档预设。**这组数是实测调过的**，选一档就有一组不自相矛盾的参数。
  */
 export const ROAMING_PRESETS = {
   light: {
@@ -100,14 +99,14 @@ export const REPLY_PRESETS = { light: 40, balanced: 80, active: 120 } as const;
 /** **同一人每天最多几条**。跨视频累计、重启不重置 —— 这是防骚扰的硬底线，不给调。 */
 export const MAX_REPLIES_PER_PERSON = 5;
 
-/** 配置里存的 secret 名（部署 `.env`）。默认沿用社交视窗那份，**只读不写**。 */
+/** 配置里存的 secret 名（部署 `.env`）。 */
 export const BILI_WATCH_SECRET = 'BILI_WATCH_COOKIE';
 /**
- * 默认读**自己的** secret。
+ * 默认登录来源：**本插件自己的 secret**。
  *
- * 过渡期可以把它改成 `SOCIALMEDIA_BILIBILI_COOKIE` —— 那样就不用重新扫码，
- * 直接复用社交视窗已经存下的登录（**只读，绝不写**）。
- * 但社交视窗一旦卸载，那个值就没人维护了，所以新装的人应该用默认值。
+ * 不读别人的变量，也不指向任何外部插件的密钥 —— 登录状态归这个插件自己管。
+ * 想换成别的位置（例如统一放在一个私有的变量名下）就改 `cookieSecret`，
+ * 但注意：写回时只会写这一个变量。
  */
 export const DEFAULT_COOKIE_SECRET = BILI_WATCH_SECRET;
 
@@ -135,6 +134,26 @@ export interface FocusConfig {
   allowMentions: boolean;
   /** 每天最多 @ 几次。 */
   maxDailyMentions: number;
+}
+
+/**
+ * 推荐给我：鱼在闲逛时看到主人可能喜欢的视频，在评论区 @ 主人说一句。
+ *
+ * **清单只是参考**，不做硬校验 —— 鱼可以推荐清单外的东西，重点是有额度、
+ * 有 @ 对象、发得出去。@ 走的还是公开发评通道，所以 posting.enabled 与
+ * transport=api 仍然必须满足。
+ */
+export interface RecommendConfig {
+  /** 总开关。默认关。 */
+  enabled: boolean;
+  /** 要 @ 的账号 UID。留空 = 复用「特别关注」里填的 UID。 */
+  ownerUid: string;
+  /** @ 时显示的昵称。留空 = 从联系人表按 UID 反查（B 站要求真实昵称）。 */
+  ownerName: string;
+  /** 主人喜欢什么（视频/UP主/关键词，每行一条）。**仅作参考，不硬性匹配**。 */
+  likedList: string;
+  /** 每天最多推荐几次。独立于「@ 特别关注」那本账。 */
+  maxDaily: number;
 }
 
 export interface DynamicsConfig {
@@ -188,6 +207,7 @@ export interface BiliWatchConfig {
 
   roaming: RoamingConfig;
   focus: FocusConfig;
+  recommend: RecommendConfig;
   dynamics: DynamicsConfig;
   posting: PostingConfig;
   monitor: ObserveConfig;
@@ -253,7 +273,7 @@ export interface BiliWatchConfig {
 
 export const BILI_WATCH_DEFAULTS: BiliWatchConfig = {
   enabled: true,
-  // 默认读社交视窗扫码存下的那份，只读不写
+  // 登录凭据存在本插件自己的 secret 里
   cookieSecret: DEFAULT_COOKIE_SECRET,
 
   // **默认用 balanced 档**：4 档里最接近"日常使用"的一组。
@@ -272,6 +292,15 @@ export const BILI_WATCH_DEFAULTS: BiliWatchConfig = {
     autoReplyIntervalMinutes: 30,
     allowMentions: false,
     maxDailyMentions: 3,
+  },
+
+  // 推荐给主人：默认关。清单只是参考，次数单独一本账。
+  recommend: {
+    enabled: false,
+    ownerUid: '',
+    ownerName: '',
+    likedList: '',
+    maxDaily: 3,
   },
 
   // 动态默认只读不发 —— 发动态是内容生产，风险比评论高

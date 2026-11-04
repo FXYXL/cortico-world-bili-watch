@@ -410,30 +410,64 @@ export class SocialStore {
     return structuredClone(this.state.inbox.find((x) => x.id === id));
   }
   getSend(id: string) {
-    return structuredClone(this.state.outbox.find((x) => x.id === id) ?? this.archive.get(id));
+    const live = this.state.outbox.find((x) => x.id === id);
+    if (live) return structuredClone(live);
+    try {
+      return structuredClone(this.archive.get(id));
+    } catch {
+      return undefined;
+    }
   }
+  /**
+   * 按防重主键取已有发送记录。
+   *
+   * **键要算，不能只看 `id`。** 新记录的 `id` 是随机 UUID，主键在 `operationId` 里；
+   * 早期迁移过来的记录则把主键放在了 `id`、`requestId` 或 `operationId` 三个位置之一。
+   * 只比其中一处 = 第一层防重静默失效（同一 requestId 可以重复发）。
+   */
   operationSends(id: string) {
+    const keyOf = (r: SendRecord): string =>
+      r.operationId ??
+      (r.requestId ? `${r.platform ?? 'bilibili'}:${r.accountId}:${r.requestId}` : r.id);
+    /** 归档摸 `node:sqlite`；拿不到就只用内存那份，**不能让防重查询抛错**。 */
+    let archived: SendRecord[] = [];
+    try {
+      archived = this.archive.operation(id);
+    } catch {
+      archived = [];
+    }
     return [
       ...new Map(
-        [
-          ...this.archive.operation(id),
-          ...this.state.outbox.filter((r) => (r.operationId ?? r.id) === id),
-        ].map((r) => [r.id, r]),
+        [...archived, ...this.state.outbox.filter((r) => keyOf(r) === id)].map((r) => [r.id, r]),
       ).values(),
     ];
   }
+  /**
+   * 这个位置是否已经有过一次非拒绝的发送。
+   *
+   * `platform` 允许记录里没有：单平台插件，历史记录（迁移来的）可能不带这个字段，
+   * 而把它写成 `r.platform === platform` 会让整条判断恒为 false —— 那等于没有这道闸。
+   */
   hasSend(platform: string, account: string, oid: string, parent?: string, owner?: string) {
-    return (
+    if (
       this.state.outbox.some(
         (r) =>
-          r.platform === platform &&
+          (!r.platform || r.platform === platform) &&
           r.accountId === account &&
           r.target.oid === oid &&
           r.status !== 'rejected' &&
           (parent === undefined || r.target.parent === parent) &&
           (owner === undefined || r.focusOwnerId === owner),
-      ) || this.archive.has(platform, account, oid, parent, owner)
-    );
+      )
+    ) {
+      return true;
+    }
+    try {
+      return this.archive.has(platform, account, oid, parent, owner);
+    } catch {
+      // 没有归档能力时只按内存判断：宁可少拦一条，也不能让整个发评流程抛错
+      return false;
+    }
   }
   hasReceipt(platform: string, account: string, id: string) {
     return (
@@ -502,8 +536,16 @@ export class SocialStore {
   }
   reserve(input: Omit<SendRecord, 'status' | 'createdAt'>) {
     if (this.getSend(input.id)) throw new Error('该发送操作已存在，请读取原回执。');
+    /**
+     * 硬上限：outbox 只增不减会让 state.json 越来越大，写盘也会变慢
+     * （`maintainHistory` 正常会把老记录挪进归档，但归档依赖 `node:sqlite`，
+     * 拿不到时不能无限堆在 JSON 里）。
+     */
+    if (this.state.outbox.length >= 4000) {
+      throw new Error('发送记录达到 4000 条保护上限，暂停新增；请先归档或清理历史。');
+    }
     this.state.outbox.push({
-      ...structuredClone(input),
+      ...structuredClone({ platform: 'bilibili', ...input }),
       createdAt: new Date().toISOString(),
       status: 'sending',
     });
@@ -517,10 +559,19 @@ export class SocialStore {
   ) {
     const r = this.state.outbox.find((x) => x.id === id);
     if (!r) {
-      const archived = this.archive.get(id);
+      let archived: SendRecord | undefined;
+      try {
+        archived = this.archive.get(id);
+      } catch {
+        archived = undefined;
+      }
       if (!archived) throw new Error('发送记录不存在');
       Object.assign(archived, patch);
-      this.archive.put([archived]);
+      try {
+        this.archive.put([archived]);
+      } catch {
+        /* 归档不可用时只改内存副本，不阻断核验结果 */
+      }
       return structuredClone(archived);
     }
     Object.assign(r, patch);

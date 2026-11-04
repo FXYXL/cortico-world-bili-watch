@@ -17,7 +17,7 @@
  * 用法：`node scripts/build-webui.mjs`（发布前会自动跑）
  */
 
-import { mkdirSync, existsSync } from 'node:fs';
+import { copyFileSync, mkdirSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,4 +74,18 @@ if (result.errors?.length) {
   process.exit(1);
 }
 
-console.log(`dist/webui.js 已生成（${(await import('node:fs')).statSync(out).size / 1024}KB）`);
+console.log(`dist/webui.js 已生成（${(statSync(out).size / 1024).toFixed(1)}KB）`);
+
+/**
+ * 样式单独出一份 `dist/webui.css` —— 宿主按 `package.json` 的
+ * `cortico.webUiStyle` 直接加载它。不要塞进 JS 里 `<style>` 注入：
+ * 那样在面板重建时会重复插一份，而且 CSP 严格的页面上会被拦。
+ */
+const cssSrc = join(root, 'src', 'webui', 'style.css');
+if (existsSync(cssSrc)) {
+  const cssOut = join(outDir, 'webui.css');
+  copyFileSync(cssSrc, cssOut);
+  console.log(`dist/webui.css 已生成（${(readFileSync(cssOut).length / 1024).toFixed(1)}KB）`);
+} else {
+  console.warn('没有 src/webui/style.css，跳过样式产物');
+}

@@ -1,22 +1,30 @@
 /**
  * social/service.ts — 社交流程的**唯一编排者**。
  *
- * 这是从 `cortico-world-social-media` 的 `service.ts`（868 行）重写来的。
- * **重写而不是照搬**：那份代码每 100 行就有 1 处 `cfg.platforms[id]`，
- * 是给多平台（B站/抖音/快手）设计的；单平台搬过来只会带一堆死分支。
+ * 多平台版本会被平台维度切得很碎（每 100 行就有 1 处 `cfg.platforms[id]`）；
+ * 只做 B 站时那些分支全是死代码，所以按单平台重写。
  *
  * ## 但每一条校验都保留了 —— 这是这个文件存在的全部理由
  *
  * 下面这些不是"流程"，是**曾经出过事的防线**。少一条就会以某种方式重发或错发：
  *
- * 1. `operationId` —— 同一个操作编号只允许一次真实发送
+ * 1. `operationId` —— 同一个操作编号只允许一次真实发送（**必须落盘**）
  * 2. `recover()`   —— 已有记录就返回原记录，**不重新提交**
  * 3. `pending`     —— 同位置已有 unknown/sending 时直接拒绝
  * 4. `validateMention` —— @ 之前校验绑定、凭证、额度、transport
- * 5. 同一人每日 5 条（跨视频累计，重启不重置）
+ * 5. 同一人每日 5 条（跨视频累计，**按天重置**）
  * 6. 通知回复额度与主动发言额度**分开算**
  * 7. 主人评论区自动回应单独计账，不占普通额度
  * 8. 可见性三档：public / self-only / unconfirmed，**后两档绝不重发**
+ *
+ * ## 2026-11-04 体检修掉的坑（都在这一个文件里）
+ *
+ * - 第一层防重查不到：`operationId` 从来没写进记录，`operationSends()` 永远返回空
+ * - `hasSend()` 恒 false：记录里没有 `platform` 字段
+ * - 单人 5 条从"每天"变成"终身"：`repliesTo()` 忘了按天过滤
+ * - 主动接楼没有 `recipientId`：不去读父楼，等于单人上限不存在
+ * - 待办每 60 秒重投一次：`deliver()` 不写 `delivered`
+ * - `verify()` 里 `return next`（变量不存在，被 catch 吞掉）
  */
 
 import { randomUUID } from 'node:crypto';
@@ -25,10 +33,12 @@ import type { BiliWatchConfig } from '../config.ts';
 import { MAX_REPLIES_PER_PERSON } from '../config.ts';
 import type { BiliClient } from '../core/client.ts';
 import { normalizeTarget } from '../core/client.ts';
-import { checkVisibility, sendComment } from '../core/comments.ts';
+import { checkVisibility, readComments, sendComment } from '../core/comments.ts';
 import { BiliError, type CommentTarget, type InboxItem, type SendRecord } from '../core/types.ts';
+import { judgeParticipation } from './judgment.ts';
 import { assessPublicInput, PublicReplySkipped } from './safety.ts';
 import { roamingConfig } from './roaming.ts';
+import { parseFocusAccount } from './focus.ts';
 import type { SocialStore } from './store.ts';
 
 /** 一次发送请求。 */
@@ -46,6 +56,8 @@ export interface PublishInput {
     advice?: string[];
   };
   mentionFocus?: boolean;
+  /** 推荐给主人：在评论区 @ 主人说一句。走独立的 recommend 账本与开关。 */
+  recommend?: boolean;
   /** 明确重试**已判定失败**的那一次。 */
   retryRejected?: boolean;
   roamId?: string;
@@ -87,7 +99,7 @@ export interface ServiceDeps {
       signal?: AbortSignal,
       expectedAccountId?: string,
       mention?: { id: string; name: string },
-    ): Promise<SendReceipt>;
+    ): Promise<import('../core/types.ts').SendReceipt>;
   };
 }
 
@@ -95,6 +107,11 @@ export class BiliService {
   private account: { id: string; name: string } | null = null;
   private lastPollAt: string | null = null;
   private lastError: string | null = null;
+  private polling = false;
+  private delivering = false;
+  /** 限流/网络错误后的退避时刻。**412 时不能再每 60 秒打一次**。 */
+  private retryAtMs = 0;
+  private readonly deliveryStartedAt = Date.now();
   private readonly cursors: Record<'reply' | 'at', { id: string; time: number } | undefined> = {
     reply: undefined,
     at: undefined,
@@ -110,16 +127,84 @@ export class BiliService {
     return this.lastPollAt;
   }
 
+  get lastPollError(): string | null {
+    return this.lastError;
+  }
+
   private day(iso = new Date().toISOString()): string {
     return dayKey(this.d.timezone, iso);
+  }
+
+  private get cfg(): BiliWatchConfig {
+    return this.d.cfg;
+  }
+
+  /* ------------------------------------------------- 推荐给主人（@ 主人） */
+
+  /**
+   * 解析「要 @ 的账号」。UID 优先用推荐配置，留空就复用特别关注绑定（已核验过的 UID）。
+   * 昵称优先用配置，留空按 UID 从联系人表反查 —— **B 站的 at_name_to_mid 要真实昵称**，
+   * `UID 456764639` 这种占位名 @ 不出来，所以反查不到就判为「还没配好」，绝不硬发。
+   */
+  recommendOwner(accountId: string): { id: string; name: string } | undefined {
+    const r = this.cfg.recommend;
+    let uid = String(r?.ownerUid ?? '').normalize('NFKC').trim();
+    if (!uid) {
+      const input = String(this.cfg.focus?.account ?? '').trim();
+      const binding = this.d.store.focusBinding(accountId, input);
+      if (binding) uid = binding.ownerId;
+      else {
+        try {
+          uid = parseFocusAccount(input).uid ?? '';
+        } catch {
+          uid = '';
+        }
+      }
+    }
+    if (!/^[1-9]\d{0,19}$/.test(uid)) return undefined;
+
+    let name = String(r?.ownerName ?? '').normalize('NFKC').trim();
+    if (!name) {
+      name =
+        this.d.store
+          .contacts()
+          .filter((c) => c.accountId === accountId && c.userId === uid)
+          .sort((a, b) => b.firstAt - a.firstAt)[0]?.names.at(-1) ?? '';
+    }
+    // 占位名不是真昵称，拿去 @ 只会静默失效
+    if (!name || /^UID\s+\d+$/.test(name)) return undefined;
+    return { id: uid, name: name.slice(0, 80) };
+  }
+
+  /** 今天还能推荐几次（闲逛机会文本与工具都读这个，保证口径一致）。 */
+  recommendStatus(accountId: string): {
+    enabled: boolean;
+    maxDaily: number;
+    usedToday: number;
+    remaining: number;
+    owner: { id: string; name: string } | undefined;
+    likedList: string;
+  } {
+    const r = this.cfg.recommend;
+    const maxDaily = Math.max(0, Number(r?.maxDaily) || 0);
+    const usedToday = this.usedToday('recommend', accountId);
+    const owner = this.recommendOwner(accountId);
+    return {
+      enabled: Boolean(r?.enabled) && maxDaily > 0 && Boolean(owner),
+      maxDaily,
+      usedToday,
+      remaining: Math.max(0, maxDaily - usedToday),
+      owner,
+      likedList: String(r?.likedList ?? '').trim(),
+    };
   }
 
   /* ---------------------------------------------------------------- 连接 */
 
   /** 连上并核对账号。 */
   async connect(signal?: AbortSignal): Promise<{ id: string; name: string }> {
-    if (!this.d.cfg.enabled) throw new BiliError('这个 World 已关闭。', 'invalid');
-    if (!this.d.secret(this.d.cfg.cookieSecret)) {
+    if (!this.cfg.enabled) throw new BiliError('这个 World 已关闭。', 'invalid');
+    if (!this.d.secret(this.cfg.cookieSecret)) {
       throw new BiliError('尚未登录，请先在面板扫码。', 'auth');
     }
     const acc = await this.d.client().account(signal);
@@ -129,6 +214,8 @@ export class BiliService {
 
   disconnect(): void {
     this.account = null;
+    this.cursors.reply = undefined;
+    this.cursors.at = undefined;
   }
 
   /* ---------------------------------------------------------------- 通知 */
@@ -140,73 +227,111 @@ export class BiliService {
    * 只拉一路会漏掉一半对话 —— 而 `reply` 这一路恰好包括"别人回复我刚发的评论"，
    * 那正是发完评论后要接的后续。
    *
-   * @returns 本轮新增几条
+   * 三条 2026-11-04 补回来的健壮性：
+   *   1. 每路最多回溯 3 页（原来只拉一页，忙的时候会漏）
+   *   2. `sinceAt` 水位落盘（原来只存在内存里，重启就丢）
+   *   3. 412/429 退避 5 分钟（原来每 60 秒硬打，越打越限）
    */
   async poll(signal?: AbortSignal, force = false): Promise<number> {
-    void force;
-    const cfg = this.d.cfg;
+    const cfg = this.cfg;
     if (!cfg.enabled || !cfg.monitor.enabled) return 0;
-    const acc = this.account ?? (await this.connect(signal));
+    if (this.polling) return 0;
+    if (this.retryAtMs > Date.now()) return 0;
+    if (
+      !force &&
+      this.lastPollAt &&
+      Date.now() - Date.parse(this.lastPollAt) < Math.max(30, cfg.monitor.intervalSec) * 1000
+    ) {
+      return 0;
+    }
 
+    this.polling = true;
     let added = 0;
-    for (const lane of ['reply', 'at'] as const) {
-      const cursor = this.cursors[lane];
-      const page = await this.d.client().notifications(lane, acc.id, cursor, signal);
-      if (page.cursor) this.cursors[lane] = page.cursor;
-
-      for (const item of page.items) {
-        // **同一条通知只进一次**：id 是 `bilibili:<accountId>:<parent>`
-        if (this.d.store.getInbox(item.id)) continue;
-        if (item.accountId !== acc.id) continue;
-        this.d.store.addInbox({ ...item, status: 'pending' });
-        this.d.store.rememberContact({
-          platform: 'bilibili',
-          accountId: acc.id,
-          authorId: item.authorId,
-          author: item.author,
-          lastAt: new Date(item.occurredAt).toISOString(),
-        });
-        added += 1;
+    const errors: string[] = [];
+    try {
+      let acc = this.account;
+      if (!acc) {
+        try {
+          acc = await this.connect(signal);
+        } catch (error) {
+          this.lastError = (error as Error).message;
+          this.retryAtMs = Date.now() + 60_000;
+          return 0;
+        }
       }
+
+      for (const lane of ['reply', 'at'] as const) {
+        const key = `bilibili:${acc.id}:${lane}`;
+        // 首次登记就把水位设在"现在"，避免一装插件就把历史通知全灌进来
+        let feed = this.d.store.feed(key);
+        try {
+          for (let page = 0; page < 3; page += 1) {
+            signal?.throwIfAborted();
+            const result = await this.d.client().notifications(
+              lane,
+              acc.id,
+              feed.cursor,
+              signal,
+            );
+            let reachedOld = false;
+            let newest = feed.sinceAt;
+            for (const item of result.items) {
+              if (Number.isFinite(item.occurredAt) && item.occurredAt > newest) {
+                newest = item.occurredAt;
+              }
+              // 比水位还老 = 这一页已经翻到底了
+              if (!Number.isFinite(item.occurredAt) || item.occurredAt < feed.sinceAt) {
+                reachedOld = true;
+                continue;
+              }
+              // 自己发的东西不算"有人在找你"
+              if (item.authorId && item.authorId === acc.id) continue;
+              if (item.accountId !== acc.id) continue;
+              if (this.d.store.getInbox(item.id)) continue;
+              if (
+                this.d.store.addInbox({
+                  ...item,
+                  platform: 'bilibili',
+                  status: 'pending',
+                  ...(item.notificationType === 'reply' || item.notificationType === 'mention'
+                    ? {}
+                    : { notificationType: 'reply' as const }),
+                })
+              ) {
+                added += 1;
+              }
+              this.d.store.rememberContact({
+                platform: 'bilibili',
+                accountId: acc.id,
+                authorId: item.authorId,
+                author: item.author,
+                lastAt: new Date(item.occurredAt).toISOString(),
+              });
+            }
+
+            const sameCursor =
+              JSON.stringify(feed.cursor) === JSON.stringify(result.cursor ?? null);
+            const done = result.done || reachedOld || !result.cursor || sameCursor;
+            this.d.store.checkpoint(key, done ? undefined : result.cursor, newest);
+            if (done) break;
+            feed = this.d.store.feed(key);
+          }
+        } catch (error) {
+          const e = error as BiliError;
+          errors.push(`${lane}: ${e.message}`);
+          if (e.kind === 'auth') this.account = null;
+          this.retryAtMs = Date.now() + (e.kind === 'rate' ? 5 * 60_000 : 60_000);
+        }
+      }
+
+      this.lastPollAt = new Date().toISOString();
+      this.lastError = errors.join('；') || null;
+      if (!errors.length) this.retryAtMs = 0;
+      return added;
+    } finally {
+      this.polling = false;
+      if (!this.lastPollAt) this.lastPollAt = new Date().toISOString();
     }
-
-    this.lastPollAt = new Date().toISOString();
-    this.lastError = null;
-    return added;
-  }
-
-  /** 还等着回复的条数。**有它在就别给闲逛机会** —— 先处理人。 */
-  pendingReplies(): InboxItem[] {
-    return this.d.store
-      .inbox()
-      .filter((i) => i.status === 'pending' && (!i.retryAt || Date.parse(i.retryAt) <= Date.now()));
-  }
-
-  /** 把待办投给模型。 */
-  async deliver(sink: (item: InboxItem) => Promise<void>): Promise<void> {
-    if (!this.d.cfg.monitor.enabled) return;
-    for (const item of this.pendingReplies()) {
-      if (item.retryAt && Date.parse(item.retryAt) > Date.now()) continue;
-      await sink(item);
-    }
-  }
-
-  /** 明确决定不接话。**这是收尾，不是失败**。 */
-  handleInbox(id: string, reason?: string): InboxItem | null {
-    const item = this.d.store.getInbox(id);
-    if (!item) throw new Error('收件箱消息不存在');
-    this.d.store.updateInbox(id, { status: 'handled' });
-    void reason;
-    return { ...item, status: 'handled' };
-  }
-
-  /** 稍后再处理（不丢待办，也不占着这一轮）。 */
-  deferInbox(id: string, minutes = 30): InboxItem | null {
-    const item = this.d.store.getInbox(id);
-    if (!item) return null;
-    const retryAt = new Date(Date.now() + Math.max(1, minutes) * 60_000).toISOString();
-    this.d.store.updateInbox(id, { retryAt });
-    return { ...item, retryAt };
   }
 
   /* ---------------------------------------------------------------- 额度 */
@@ -224,53 +349,271 @@ export class BiliService {
       ).length;
   }
 
-  /** 同一人今天已经回了几条（**跨视频累计，重启不重置**）。 */
-  private repliesTo(recipientId: string, accountId: string): number {
+  /**
+   * 同一人**今天**已经回了几条。
+   *
+   * `重启不重置` 靠的是记录落盘；但**必须按天过滤** ——
+   * 漏了它，这个上限就从"每天 5 条"变成"终身 5 条"（实测库里已经有人卡死）。
+   */
+  private repliesToday(recipientId: string, accountId: string): number {
+    const today = this.day();
     return this.d.store
       .outbox()
       .filter(
         (r) =>
           r.accountId === accountId &&
           r.recipientId === recipientId &&
-          r.status !== 'rejected',
+          r.status !== 'rejected' &&
+          this.day(r.createdAt) === today,
       ).length;
   }
 
+  /** 这条通知该不该发、该走哪本账。返 `undefined` = 没限制。 */
+  private notificationLimit(item: InboxItem): string | undefined {
+    const cfg = this.cfg;
+    if (item.focusOwnerId) {
+      if (!cfg.focus.enabled) return '特别关注已关闭，本条不再主动参与。';
+      const binding = this.d.store.focusBinding(item.accountId, cfg.focus.account.trim());
+      if (!binding || binding.ownerId !== item.focusOwnerId) {
+        return '特别关注绑定已改变，本条不再主动参与。';
+      }
+      if (item.ownerAutoReply) {
+        if (!cfg.focus.autoReplyNewComments) return '主人评论区自动回应已关闭。';
+        return undefined;
+      }
+      const today = this.day();
+      const used = this.d.store
+        .outbox()
+        .filter(
+          (r) =>
+            r.accountId === item.accountId &&
+            r.focusOwnerId === item.focusOwnerId &&
+            !r.ownerAutoReply &&
+            r.status !== 'rejected' &&
+            this.day(r.createdAt) === today,
+        ).length;
+      if (used >= cfg.focus.maxDailyActions) {
+        return '今日特别关注参与额度已用完，保留记录即可。';
+      }
+      return undefined;
+    }
+
+    if (this.usedToday('reply', item.accountId) >= cfg.posting.maxDailyReplies) {
+      return '今日通知回应额度已用完，请留到明天。';
+    }
+    if (item.target.parent !== '0' && item.authorId) {
+      if (this.repliesToday(item.authorId, item.accountId) >= MAX_REPLIES_PER_PERSON) {
+        return `今天已回应这位用户 ${MAX_REPLIES_PER_PERSON} 条，请留到明天。`;
+      }
+    }
+    return undefined;
+  }
+
+  private isAutoReply(item: InboxItem): boolean {
+    return Boolean(
+      item.focusOwnerId &&
+        item.notificationType === 'focus-comment' &&
+        item.target.parent !== '0' &&
+        (item.ownerAutoReply || this.cfg.focus.autoReplyNewComments),
+    );
+  }
+
+  /** 这个位置是不是已经发过了（防重第二层之外的另一道闸）。 */
+  private alreadySent(item: InboxItem): boolean {
+    return this.d.store.hasSend('bilibili', item.accountId, item.target.oid, item.target.parent);
+  }
+
+  private storageLimit(): string | undefined {
+    /**
+     * `historyStatus()` 会摸 `node:sqlite`。**拿不到归档能力时必须放行** ——
+     * 让它抛出去会连累 `pendingReplies()`，整个同步周期每一轮都失败。
+     */
+    let bytes = 0;
+    let maxArchiveBytes = Infinity;
+    try {
+      const h = this.d.store.historyStatus();
+      bytes = h.bytes;
+      maxArchiveBytes = h.maxArchiveBytes;
+    } catch {
+      return undefined;
+    }
+    if (bytes >= maxArchiveBytes) {
+      return '历史归档达到空间预算，请在配置里查看并调整；记录与防重凭据保留。';
+    }
+    const pendingSends = this.d.store
+      .outbox()
+      .filter((r) => r.status === 'unknown' || r.status === 'sending').length;
+    if (pendingSends >= 200) {
+      return '待核实发送过多，暂停新增发评；原记录保留，请先核实结果。';
+    }
+    return undefined;
+  }
+
+  /** 还等着回复的条数。**有它在就别给闲逛机会** —— 先处理人。 */
+  pendingReplies(): InboxItem[] {
+    if (this.storageLimit()) return [];
+    if (!this.cfg.posting.enabled) return [];
+    return this.d.store
+      .inbox()
+      .filter(
+        (i) =>
+          i.status === 'pending' &&
+          (!i.retryAt || Date.parse(i.retryAt) <= Date.now()) &&
+          !this.alreadySent(i) &&
+          assessPublicInput(i.text).action !== 'skip' &&
+          !this.notificationLimit(i),
+      );
+  }
+
   /**
-   * 检查额度。
+   * 把待办投给模型。
    *
-   * 三本账必须分开：
-   *   - **通知回复**（`reply`）：额度 `maxDailyReplies`
-   *   - **主动发言**（`proactive`）：额度 `maxDailyComments`
-   *   - **主人评论区自动回应**（`focus`）：单独计账，不占上面两本
-   *
-   * 混在一起的后果：鱼把回复额度花在主动发言上，真正有人找它时反而没额度了。
+   * **必须写 `delivered`**：不写的话每一轮都会把同一条待办重新推一遍事件，
+   * 模型会以为"又有一个人回复了"——这是最容易让人觉得"这鱼疯了"的表现。
+   * 已投过的，15 分钟后才允许再投（那次是提醒，不是新消息）。
    */
-  private assertQuota(kind: SendRecord['kind'], accountId: string, recipientId?: string): void {
-    const cfg = this.d.cfg;
+  async deliver(sink: (item: InboxItem) => Promise<void>): Promise<void> {
+    if (!this.cfg.monitor.enabled || !this.cfg.posting.enabled) return;
+    if (this.delivering || this.storageLimit()) return;
+    this.delivering = true;
+    try {
+      const candidates = this.d.store
+        .inbox()
+        .filter(
+          (i) =>
+            i.status === 'pending' &&
+            (!i.retryAt || Date.parse(i.retryAt) <= Date.now()) &&
+            !this.alreadySent(i) &&
+            (!i.delivered ||
+              !i.deliveredAt ||
+              Date.parse(i.deliveredAt) < this.deliveryStartedAt ||
+              Date.now() - Date.parse(i.deliveredAt) >= 15 * 60_000),
+        )
+        .sort(
+          (a, b) =>
+            Number(Boolean(b.focusOwnerId)) - Number(Boolean(a.focusOwnerId)) ||
+            Number(Boolean(a.delivered)) - Number(Boolean(b.delivered)) ||
+            a.occurredAt - b.occurredAt,
+        )
+        .slice(0, 3);
+
+      for (const item of candidates) {
+        const assessment = assessPublicInput(item.text);
+        const limit = this.notificationLimit(item);
+        if (assessment.action === 'skip' || limit) {
+          this.d.store.updateInbox(item.id, {
+            status: 'handled',
+            handling: {
+              kind: assessment.kind ?? 'limit',
+              reason: assessment.reason ?? limit ?? '本机规则跳过',
+            },
+          });
+          continue;
+        }
+        await sink({ ...item, ownerAutoReply: this.isAutoReply(item) || undefined });
+        this.d.store.updateInbox(item.id, {
+          delivered: true,
+          deliveredAt: new Date().toISOString(),
+          ownerAutoReply: this.isAutoReply(item) || undefined,
+        });
+      }
+    } finally {
+      this.delivering = false;
+    }
+  }
+
+  /** 明确决定不接话。**这是收尾，不是失败** —— 理由要留下来。 */
+  handleInbox(id: string, reason?: string): InboxItem | null {
+    const item = this.d.store.getInbox(id);
+    if (!item) throw new Error('收件箱消息不存在');
+    this.d.store.updateInbox(id, {
+      status: 'handled',
+      ...(reason?.trim()
+        ? { handling: { kind: 'skip' as const, reason: reason.trim().slice(0, 500) } }
+        : {}),
+    });
+    return { ...item, status: 'handled' };
+  }
+
+  /** 稍后再处理（不丢待办，也不占着这一轮）。 */
+  deferInbox(id: string, minutes = 30): InboxItem | null {
+    const item = this.d.store.getInbox(id);
+    if (!item) return null;
+    const retryAt = new Date(Date.now() + Math.max(1, minutes) * 60_000).toISOString();
+    this.d.store.updateInbox(id, { retryAt, delivered: false });
+    return { ...item, retryAt };
+  }
+
+  /* ---------------------------------------------------------------- 发布 */
+
+  /**
+   * 读父楼作者，补 `recipientId`。
+   *
+   * **不补就等于没有单人上限**：闲逛接楼时 target 是"回复某条评论"，
+   * 只有拿到被回复者的 mid，5 条/天才有意义。
+   */
+  private async parentAuthor(target: CommentTarget, signal?: AbortSignal): Promise<string | undefined> {
+    const cached = this.d.store.comment(target)?.authorId;
+    if (cached) return cached;
+    if (target.parent === '0') return undefined;
+    try {
+      const page = await readComments(
+        this.d.client(),
+        { ...target, parent: '0' },
+        1,
+        signal,
+      );
+      this.d.store.rememberComments(page);
+      return this.d.store.comment(target)?.authorId;
+    } catch {
+      // 读不到父楼不是"不能发"的理由，但下面会因为没有 recipientId 而拒绝
+      return undefined;
+    }
+  }
+
+  private assertQuota(
+    kind: SendRecord['kind'],
+    accountId: string,
+    recipientId: string | undefined,
+    ownerAutoReply = false,
+  ): void {
+    const cfg = this.cfg;
     if (!cfg.posting.enabled) {
       throw new BiliError('公开发布已关闭，请由主人在这个 World 的设置里开启。', 'auth');
     }
+    // 主人评论区自动回应单独计账：不占普通额度，也不设单人次数上限
+    if (kind === 'focus' && ownerAutoReply) return;
 
     // 同一人的硬底线 —— 不给调，也不受任何档位影响
-    if (recipientId) {
-      const n = this.repliesTo(recipientId, accountId);
+    if (recipientId && kind !== 'focus') {
+      const n = this.repliesToday(recipientId, accountId);
       if (n >= MAX_REPLIES_PER_PERSON) {
-        throw new BiliError(
+        throw new PublicReplySkipped(
           `今天已经回这个人 ${n} 条了（上限 ${MAX_REPLIES_PER_PERSON}）。换个人、或者等明天。`,
-          'rate',
         );
       }
     }
 
-    if (kind === 'focus') return; // 主人评论区单独计账
-
-    const used = this.usedToday(kind, accountId);
-    if (kind === 'reply' && used >= cfg.posting.maxDailyReplies) {
-      throw new BiliError(`今日回复额度已用完（${used}/${cfg.posting.maxDailyReplies}）。`, 'rate');
-    }
-    if (kind === 'proactive' && used >= cfg.posting.maxDailyComments) {
-      throw new BiliError(`今日主动发言额度已用完（${used}/${cfg.posting.maxDailyComments}）。`, 'rate');
+    if (kind === 'focus') return; // 特别关注那本账在 notificationLimit 里算过
+    // 推荐给主人是独立账本（recommend.maxDaily），不占主动发言额度
+    if (kind === 'recommend') {
+      const r = cfg.recommend;
+      const used = this.usedToday('recommend', accountId);
+      const limit = Math.max(0, Number(r?.maxDaily) || 0);
+      if (!r?.enabled || used >= limit) {
+        throw new PublicReplySkipped(`今日推荐额度已用完（${used}/${limit}），明天再来。`);
+      }
+      // 不 return：下面「两条评论最小间隔」照样生效，避免连着刷屏
+    } else {
+      const used = this.usedToday(kind, accountId);
+      if (kind === 'reply' && used >= cfg.posting.maxDailyReplies) {
+        throw new PublicReplySkipped(`今日回复额度已用完（${used}/${cfg.posting.maxDailyReplies}）。`);
+      }
+      if (kind === 'proactive' && used >= cfg.posting.maxDailyComments) {
+        throw new PublicReplySkipped(
+          `今日主动发言额度已用完（${used}/${cfg.posting.maxDailyComments}）。`,
+        );
+      }
     }
 
     // 两条评论之间的最小间隔
@@ -281,15 +624,14 @@ export class BiliService {
     if (last) {
       const gap = (Date.now() - Date.parse(last.createdAt)) / 1000;
       if (gap < cfg.posting.minIntervalSec) {
-        throw new BiliError(
-          `距上一条评论只过了 ${Math.round(gap)} 秒，至少要 ${cfg.posting.minIntervalSec} 秒。`,
-          'rate',
+        const wait = Math.max(1, Math.ceil(cfg.posting.minIntervalSec - gap));
+        throw new PublicReplySkipped(
+          `距上一条评论只过了 ${Math.round(gap)} 秒，至少要 ${cfg.posting.minIntervalSec} 秒；还要等 ${wait} 秒。`,
+          wait,
         );
       }
     }
   }
-
-  /* ---------------------------------------------------------------- 发布 */
 
   /**
    * 发一条评论。**四层防重，任何一层命中都不提交。**
@@ -301,28 +643,18 @@ export class BiliService {
    *   4. 额度与间隔      —— 拒绝（否则刷屏）
    */
   async publish(input: PublishInput, signal?: AbortSignal): Promise<PublishResult> {
-    const cfg = this.d.cfg;
+    const cfg = this.cfg;
     if (!cfg.posting.enabled) {
       throw new BiliError('公开发布已关闭，请由主人在这个 World 的设置里开启。', 'auth');
     }
     const text = String(input.text ?? '').trim();
     if (!text || text.length > 1000) throw new BiliError('评论应为 1–1000 字', 'invalid');
 
-    // 内容安全：明显的无依据亲历之类的本地拦截
-    try {
-      assessPublicInput({ text, purpose: input.preparation?.purpose });
-    } catch (error) {
-      if (error instanceof PublicReplySkipped) {
-        throw new BiliError(`这条不发了：${error.message}`, 'rejected');
-      }
-      throw error;
-    }
-
     const acc = this.account ?? (await this.connect(signal));
 
-    // 定位目标
+    // ── 定位目标与账本 ───────────────────────────────────────────────
     let target: CommentTarget;
-    let kind: SendRecord['kind'] = 'proactive';
+    let kind: SendRecord['kind'] = input.recommend ? 'recommend' : 'proactive';
     let recipientId: string | undefined;
     let inboxItem: InboxItem | undefined;
     if (input.inboxId) {
@@ -332,10 +664,20 @@ export class BiliService {
         throw new Error('该消息属于其他账号，不能用当前账号回复。');
       }
       target = normalizeTarget(inboxItem.target);
-      kind = 'reply';
+      kind = inboxItem.focusOwnerId ? 'focus' : 'reply';
       recipientId = inboxItem.authorId || undefined;
     } else {
       target = normalizeTarget(input.target);
+    }
+
+    // 接楼必须有 recipientId：拿不到就不发，绝不绕过单人上限
+    if (!input.inboxId && target.parent !== '0') {
+      recipientId = await this.parentAuthor(target, signal);
+      if (!recipientId || !/^[1-9]\d*$/.test(recipientId)) {
+        throw new PublicReplySkipped(
+          '暂未取得对方平台账号身份，本次不发；先读清原楼层（bili_comments）再来，不换目标绕过每人上限。',
+        );
+      }
     }
 
     const requestId = input.inboxId ? `reply:${input.inboxId}` : input.requestId;
@@ -343,14 +685,10 @@ export class BiliService {
       throw new BiliError('新评论必须提供固定的 requestId；重试要沿用原值。', 'invalid');
     }
     const operationId = `bilibili:${acc.id}:${requestId}`;
+    const previousAttempts = this.d.store.operationSends(operationId);
 
-    /**
-     * **第一层：同编号已有记录。**
-     *
-     * `rejected` 是唯一允许重试的状态 —— 那是"确定没发出去"，
-     * 而 `unknown` / `sent` / `sending` 都**不许**重试。
-     */
-    const prior = this.d.store.operationSends(operationId).at(-1);
+    // ── 第一层：同编号已有记录 ────────────────────────────────────────
+    const prior = previousAttempts.at(-1);
     if (prior) {
       if (prior.text !== text && !(input.retryRejected && prior.status === 'rejected')) {
         throw new BiliError('同一操作编号的内容发生变化，请先核实原发送记录。', 'rejected');
@@ -368,7 +706,7 @@ export class BiliService {
       }
     }
 
-    /** **第二层：同位置已有未核实的发送。** */
+    // ── 第二层：同位置已有未核实的发送 ────────────────────────────────
     const pending = this.d.store
       .outbox()
       .find(
@@ -387,55 +725,163 @@ export class BiliService {
       };
     }
 
-    /** **第三层：@ 的凭证与绑定。** */
-    const mention = input.preparation?.mention;
-    if (input.mentionFocus && !mention) {
-      throw new BiliError('@ 特别关注需要先 prepare 取得发送凭据。', 'rejected');
+    // ── 凭据（briefId）：目标/账号/草稿必须对得上 ─────────────────────
+    const brief = input.preparation?.briefId
+      ? this.d.store.brief(input.preparation.briefId)
+      : undefined;
+    if (input.preparation?.briefId && !brief) {
+      throw new BiliError('找不到这份接话凭据（可能已过期），请重新 bili_prepare。', 'rejected');
+    }
+    if (brief) {
+      if (brief.accountId !== acc.id) {
+        throw new BiliError('凭据属于另一个账号，未提交。', 'rejected');
+      }
+      if (JSON.stringify(brief.target) !== JSON.stringify(target)) {
+        throw new BiliError('凭据绑定的目标与本次发送不一致，未提交；请重新 prepare。', 'rejected');
+      }
+      // 草稿非空时要求一字不差：改了文案就该重新 prepare（重新读上下文与建议）
+      if (brief.draft && brief.draft !== text) {
+        throw new BiliError(
+          '文案与凭据里的草稿不一致。把新文案作为 draft 重新 bili_prepare，再 publish；不要用旧凭据发新话。',
+          'rejected',
+        );
+      }
+    }
+
+    // ── 第三层：@ 的凭证与绑定 ───────────────────────────────────────
+    // 两条独立通道：
+    //   ① 推荐给主人 —— @ 的 UID/昵称来自本地推荐配置，走 recommend 账本；
+    //   ② @ 特别关注 —— @ 的 UID 必须等于已核验的 focus 绑定，走 focus 账本。
+    // 混在一起会让「@ 我」被错误地拿去和 UP 主绑定比对，永远发不出去。
+    const recommend = input.recommend === true;
+    if (recommend) {
+      const st = this.recommendStatus(acc.id);
+      if (!st.enabled) {
+        throw new PublicReplySkipped(
+          '推荐给主人没配好：请确认开关已开、每日次数 > 0、且被 @ 的账号有真实昵称。',
+        );
+      }
+      if (kind !== 'recommend' || input.inboxId || target.parent !== '0') {
+        throw new BiliError('推荐给主人只能在视频下新发一条评论，不能接楼或回复通知。', 'invalid');
+      }
+      if (cfg.posting.transport !== 'api') {
+        throw new BiliError('@ 主人需要在配置里选「接口发评」；网页发评不会自动切换。', 'rejected');
+      }
+      if (st.remaining <= 0) {
+        throw new PublicReplySkipped(
+          `今日推荐额度已用完（${st.usedToday}/${st.maxDaily}），明天再来。`,
+        );
+      }
+      if (!brief || !brief.mention || JSON.stringify(brief.mention) !== JSON.stringify(st.owner)) {
+        throw new BiliError('推荐凭据无效：请重新 bili_recommend({ action: "prepare" })。', 'rejected');
+      }
+    }
+
+    const mention = recommend
+      ? this.recommendOwner(acc.id)
+      : (brief?.mention ?? input.preparation?.mention);
+    if (input.mentionFocus && !mention && !recommend) {
+      throw new PublicReplySkipped(
+        '@ 特别关注需要先 bili_prepare({ mentionFocus: true, draft }) 取得发送凭据。',
+      );
     }
     if (mention) {
-      const b = input.preparation?.briefId
-        ? this.d.store.brief(input.preparation.briefId)
-        : undefined;
       if (
-        !b ||
-        b.accountId !== acc.id ||
-        JSON.stringify(b.target) !== JSON.stringify(target) ||
-        b.draft !== text ||
-        JSON.stringify(b.mention) !== JSON.stringify(mention) ||
-        Date.now() - Date.parse(b.createdAt) > 3_600_000
+        !brief ||
+        brief.accountId !== acc.id ||
+        JSON.stringify(brief.target) !== JSON.stringify(target) ||
+        (brief.draft && brief.draft !== text) ||
+        JSON.stringify(brief.mention) !== JSON.stringify(mention) ||
+        Date.now() - Date.parse(brief.createdAt) > 3 * 3600_000
       ) {
         throw new BiliError('@ 发送凭据无效或已过期，未提交。', 'rejected');
       }
-      if (!cfg.focus.enabled || !cfg.focus.allowMentions) {
-        throw new BiliError('主动 @ 没有在本地开启，未提交。', 'rejected');
-      }
-      const binding = this.d.store.focusBinding(acc.id, '');
-      if (!binding || binding.ownerId !== mention.id) {
-        throw new BiliError('@ 对象与当前本地特别关注绑定不一致，未提交。', 'rejected');
-      }
-      if (cfg.posting.transport !== 'api') {
-        throw new BiliError('主动 @ 需要在本地显式选择接口发评；网页发评不会自动切换。', 'rejected');
-      }
-      const today = this.day();
-      const used = this.d.store
-        .outbox()
-        .filter(
-          (r) =>
-            r.accountId === acc.id && r.mention && r.status !== 'rejected' && this.day(r.createdAt) === today,
-        ).length;
-      if (used >= cfg.focus.maxDailyMentions) {
-        throw new BiliError(`今日 @ 额度已用完（${used}/${cfg.focus.maxDailyMentions}）。`, 'rate');
+      if (!recommend) {
+        if (!cfg.focus.enabled || !cfg.focus.allowMentions) {
+          throw new PublicReplySkipped('主动 @ 没有在本地开启，未提交。');
+        }
+        const binding = this.d.store.focusBinding(acc.id, cfg.focus.account.trim());
+        if (!binding || binding.ownerId !== mention.id) {
+          throw new BiliError('@ 对象与当前本地特别关注绑定不一致，未提交。', 'rejected');
+        }
+        if (cfg.posting.transport !== 'api') {
+          throw new BiliError('主动 @ 需要在本地显式选择接口发评；网页发评不会自动切换。', 'rejected');
+        }
+        const today = this.day();
+        const used = this.d.store
+          .outbox()
+          .filter(
+            (r) =>
+              r.accountId === acc.id &&
+              r.kind !== 'recommend' &&
+              r.mention &&
+              r.status !== 'rejected' &&
+              this.day(r.createdAt) === today,
+          ).length;
+        if (used >= cfg.focus.maxDailyMentions) {
+          throw new PublicReplySkipped(`今日 @ 额度已用完（${used}/${cfg.focus.maxDailyMentions}）。`);
+        }
       }
     }
 
-    /** **第四层：额度与间隔。** */
-    this.assertQuota(kind, acc.id, recipientId);
+    // ── 内容判断：外部文本安全 + 参与判断 ─────────────────────────────
+    const sourceText = inboxItem?.text ?? this.d.store.comment(target)?.text ?? '';
+    if (sourceText) {
+      const assessment = assessPublicInput(sourceText);
+      if (assessment.action === 'skip') {
+        if (inboxItem) {
+          this.d.store.updateInbox(inboxItem.id, {
+            status: 'handled',
+            handling: { kind: assessment.kind ?? 'unsafe', reason: assessment.reason ?? '跳过' },
+          });
+        }
+        throw new PublicReplySkipped(`外部请求已跳过：${assessment.reason ?? ''}`);
+      }
+    }
+    const videoTitle =
+      this.d.store.video(target.oid)?.title ?? brief?.videoTitle ?? '';
+    const participation = judgeParticipation(
+      videoTitle,
+      text,
+      (input.preparation?.judgment ?? brief?.judgment) as
+        | { mode?: string; evidence?: string }
+        | undefined,
+    );
+    if (participation.needsRevision || participation.mode !== 'discuss') {
+      throw new PublicReplySkipped(participation.reason);
+    }
+
+    // ── 第四层：额度与间隔 ───────────────────────────────────────────
+    if (input.roamId !== undefined) {
+      if (typeof input.roamId !== 'string' || !input.roamId || input.roamId.length > 80) {
+        throw new BiliError('闲逛编号无效。', 'invalid');
+      }
+    }
+    if (inboxItem) {
+      const limit = this.notificationLimit(inboxItem);
+      if (limit) {
+        this.d.store.updateInbox(inboxItem.id, {
+          status: 'handled',
+          handling: { kind: 'limit', reason: limit },
+        });
+        throw new PublicReplySkipped(limit);
+      }
+    }
+    this.assertQuota(kind, acc.id, recipientId, Boolean(inboxItem && this.isAutoReply(inboxItem)));
+
+    const limited = this.storageLimit();
+    if (limited) {
+      if (inboxItem) this.d.store.updateInbox(inboxItem.id, { delivered: false });
+      throw new PublicReplySkipped(limited);
+    }
 
     signal?.throwIfAborted();
 
-    // 先落一条 `sending`：**崩在这里也能看出"可能发出去了"**
+    // ── 落盘占位：崩在这里也能看出"可能发出去了" ─────────────────────
     const record: SendRecord = {
       id: randomUUID(),
+      operationId,
+      platform: 'bilibili',
       requestId,
       accountId: acc.id,
       target,
@@ -447,14 +893,36 @@ export class BiliService {
       ...(input.inboxId ? { inboxId: input.inboxId } : {}),
       ...(input.roamId ? { roamId: input.roamId } : {}),
       ...(mention ? { mention } : {}),
+      ...(inboxItem?.focusOwnerId ? { focusOwnerId: inboxItem.focusOwnerId } : {}),
+      ...(inboxItem && this.isAutoReply(inboxItem) ? { ownerAutoReply: true } : {}),
+      ...(brief
+        ? {
+            preparation: {
+              briefId: brief.id,
+              purpose: brief.purpose,
+              advice: brief.advice,
+              ...(brief.mention ? { mention: brief.mention } : {}),
+              ...(brief.judgment ? { judgment: brief.judgment } : {}),
+            },
+          }
+        : {}),
     };
     this.d.store.reserve({
-      id: record.id, requestId: record.requestId, accountId: record.accountId,
-      target: record.target, text: record.text, kind: record.kind,
+      id: record.id,
+      operationId: record.operationId,
+      platform: record.platform,
+      requestId: record.requestId,
+      accountId: record.accountId,
+      target: record.target,
+      text: record.text,
+      kind: record.kind,
       ...(record.recipientId ? { recipientId: record.recipientId } : {}),
       ...(record.inboxId ? { inboxId: record.inboxId } : {}),
       ...(record.roamId ? { roamId: record.roamId } : {}),
       ...(record.mention ? { mention: record.mention } : {}),
+      ...(record.focusOwnerId ? { focusOwnerId: record.focusOwnerId } : {}),
+      ...(record.ownerAutoReply ? { ownerAutoReply: record.ownerAutoReply } : {}),
+      ...(record.preparation ? { preparation: record.preparation } : {}),
     });
 
     try {
@@ -464,18 +932,18 @@ export class BiliService {
        * `api` 走接口（不用开浏览器，最省事）；`browser` 用真实 Chrome/Edge 点评论框
        * （更接近真人，更不容易被判定为机器人，但要装浏览器、也慢）。
        *
-       * 两个通道都有各自的失败语义：浏览器失败时**可能已经点出去了**
-       * （页面点了按钮但网络断了），所以 browser 的失败一律当 `unknown` 处理，
-       * 只有 api 能明确区分"确定没发出去"。
+       * 两个通道都有各自的失败语义：浏览器失败时**可能已经点出去了**，
+       * 所以 browser 的失败一律当 `unknown` 处理，只有 api 能明确区分"确定没发出去"。
        */
-      const transport = this.d.cfg.posting.transport ?? 'api';
-      const receipt = transport === 'browser' && this.d.browser
-        ? await this.d.browser.send(target, text, signal, acc.id, mention ?? undefined)
-        : await sendComment(this.d.client(), target, text, {
-          signal,
-          expectedAccountId: acc.id,
-          ...(mention ? { mention } : {}),
-        });
+      const transport = this.cfg.posting.transport ?? 'api';
+      const receipt =
+        transport === 'browser' && this.d.browser
+          ? await this.d.browser.send(target, text, signal, acc.id, mention ?? undefined)
+          : await sendComment(this.d.client(), target, text, {
+              signal,
+              expectedAccountId: acc.id,
+              ...(mention ? { mention } : {}),
+            });
 
       // 发完立刻核验可见性（**用访客视角**）
       let visibility;
@@ -531,26 +999,50 @@ export class BiliService {
 
   /** 复查一条回执的可见性。**只核验，不重发。** */
   async verify(id: string, signal?: AbortSignal): Promise<SendRecord | null> {
-    const record = this.d.store.outbox().find((r) => r.id === id);
+    const record = this.d.store.getSend(id);
     if (!record) return null;
     if (!record.receiptId) return record;
+    // 已有 public / self-only 的结论不需要再查（self-only 是平台裁定，不会变好）
+    if (record.visibility?.status === 'public') return record;
     try {
-      const visibility = await checkVisibility(this.d.client(), record.target, record.receiptId, signal);
-      this.d.store.updateSend(record.id, { visibility });
-      return next;
+      const visibility = await checkVisibility(
+        this.d.client(),
+        record.target,
+        record.receiptId,
+        signal,
+      );
+      // 已经明确 self-only 的，后续读不到也不能降级成"待核验"
+      const merged =
+        visibility.status === 'unconfirmed' && record.visibility?.status === 'self-only'
+          ? record.visibility
+          : visibility;
+      return this.d.store.updateSend(record.id, { visibility: merged });
     } catch {
+      // 核验失败要保住原始回执，不能因为核不了就说发送失败
       return record;
     }
   }
 
-  /** 批量复查最近那些还没定论的记录。 */
+  /** 批量复查最近那些还没定论的记录（只查 3 分钟内的，避免长期打接口）。 */
   async verifyRecent(signal?: AbortSignal): Promise<number> {
+    const now = Date.now();
+    const recent = this.d.store
+      .outbox()
+      .filter(
+        (r) =>
+          r.status === 'sent' &&
+          r.receiptId &&
+          r.visibility?.status !== 'public' &&
+          r.visibility?.status !== 'self-only' &&
+          now - Date.parse(r.createdAt) < 180_000 &&
+          (!r.visibility || now - Date.parse(r.visibility.checkedAt) >= 20_000),
+      )
+      .slice(-2);
     let n = 0;
-    for (const r of this.d.store.outbox().slice(-20)) {
-      if (!r.receiptId) continue;
-      if (r.visibility?.status === 'public' || r.visibility?.status === 'self-only') continue;
-      const out = await this.verify(r.id, signal);
-      if (out) n += 1;
+    for (const r of recent) {
+      if (signal?.aborted) break;
+      await this.verify(r.id, signal).catch(() => {});
+      n += 1;
     }
     return n;
   }
@@ -558,8 +1050,12 @@ export class BiliService {
   /* ---------------------------------------------------------------- 状态 */
 
   status() {
-    const cfg = this.d.cfg;
+    const cfg = this.cfg;
     const acc = this.account;
+    const today = this.day();
+    const sentToday = this.d.store
+      .outbox()
+      .filter((r) => r.status !== 'rejected' && this.day(r.createdAt) === today).length;
     return {
       enabled: cfg.enabled,
       loggedIn: Boolean(this.d.secret(cfg.cookieSecret)),
@@ -571,20 +1067,25 @@ export class BiliService {
         replyPriority: this.pendingReplies().length,
       },
       pendingReplies: this.pendingReplies().length,
+      unknownSends: this.d.store.outbox().filter((r) => r.status === 'unknown').length,
+      sentToday,
       lastPollAt: this.lastPollAt,
       lastError: this.lastError,
       // 三本账分别报，不要合成一个数
       quota: acc
         ? {
-          repliesToday: this.usedToday('reply', acc.id),
-          repliesLimit: cfg.posting.maxDailyReplies,
-          proactiveToday: this.usedToday('proactive', acc.id),
-          proactiveLimit: cfg.posting.maxDailyComments,
-          focusToday: this.usedToday('focus', acc.id),
-          perPersonLimit: MAX_REPLIES_PER_PERSON,
-        }
+            repliesToday: this.usedToday('reply', acc.id),
+            repliesLimit: cfg.posting.maxDailyReplies,
+            proactiveToday: this.usedToday('proactive', acc.id),
+            proactiveLimit: cfg.posting.maxDailyComments,
+            focusToday: this.usedToday('focus', acc.id),
+            recommendToday: this.usedToday('recommend', acc.id),
+            recommendLimit: Math.max(0, Number(cfg.recommend?.maxDaily) || 0),
+            perPersonLimit: MAX_REPLIES_PER_PERSON,
+          }
         : null,
       roaming: roamingConfig(cfg).enabled,
+      storage: this.storageLimit() ?? null,
     };
   }
 }

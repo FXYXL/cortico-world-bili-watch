@@ -34,10 +34,10 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
       },
       'worlds.bili-watch.cookieSecret': {
         type: 'string',
-        title: '登录来源（环境变量名）',
+        title: '登录凭据的变量名',
         description:
-          '默认直接读社交视窗扫码存下的那份（SOCIALMEDIA_BILIBILI_COOKIE），**只读不写**。' +
-          '留空 = 匿名（只有低清晰度，多半也没有字幕）。',
+          '默认 `BILI_WATCH_COOKIE`。扫码成功后 cookie 会写进这个变量；' +
+          '填别的名字就会写到那里（只会写这一个）。留空 = 不登录（只有低清晰度，多半也没有字幕）。',
         'x-hot': true,
       },
 
@@ -89,6 +89,30 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
         description: 'low=60 / med=120 / high=400，截断落在句末。',
         'x-hot': true,
       },
+      'worlds.bili-watch.read.budget': {
+        type: 'integer',
+        title: '单张图像素预算',
+        minimum: 64000,
+        maximum: 640000,
+        description: '640000 = 800×800 是上限。调小更省 token，但格子里的字会糊。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.read.maxFrames': {
+        type: 'integer',
+        title: '单次最多几帧',
+        minimum: 0,
+        maximum: 10000,
+        description: '0 = 不限制。36–40 通常够用；设太大文本索引会很长。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.read.segment': {
+        type: 'integer',
+        title: '长片默认窗口（秒）',
+        minimum: 30,
+        maximum: 3600,
+        description: '超过 8 分钟、又没给 from/to 时按这个长度分段读。300 适合影视，120–180 适合动作片。',
+        'x-hot': true,
+      },
       'worlds.bili-watch.media.mediaMaxMB': {
         type: 'integer',
         title: '媒体缓存上限（MB）',
@@ -103,6 +127,29 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
         minimum: 0,
         maximum: 500,
         description: '含命中缓存的重看。自主闲逛时的护栏。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.media.maxDeliveredMB': {
+        type: 'integer',
+        title: '累计图片交付预算（MB）',
+        minimum: 0,
+        maximum: 5120,
+        description: '到了就不再附图，只给文本索引 —— 防止悄悄烧掉大量图片 token。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.media.maxCacheMB': {
+        type: 'integer',
+        title: '扫描缓存上限（MB）',
+        minimum: 32,
+        maximum: 4096,
+        description: '分镜图的本地缓存；超了按最近使用淘汰。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.media.cacheDays': {
+        type: 'integer',
+        title: '缓存保留天数',
+        minimum: 1,
+        maximum: 90,
         'x-hot': true,
       },
       'worlds.bili-watch.asr.mode': {
@@ -248,12 +295,39 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
       'worlds.bili-watch.focus.enabled': {
         type: 'boolean',
         title: '特别关注某个 UP 主',
+        description: '开启后会定时看这个人的新投稿，并把新作品/主人评论区的新评论变成待办。',
         'x-hot': true,
       },
       'worlds.bili-watch.focus.account': {
         type: 'string',
-        title: '关注的 UID',
-        description: '**只能在这里填**，工具改不了绑定（防止模型自己换关注对象）。',
+        title: '关注的 UID（或主页链接／昵称）',
+        description:
+          '**只能在这里填**，工具改不了绑定（防止模型自己换关注对象）。' +
+          '填纯 UID 最稳；填昵称要靠收到过这个人的通知才能反查，反查不到就绑定失败。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.focus.intervalMinutes': {
+        type: 'integer',
+        title: '多久检查一次新作品（分钟）',
+        minimum: 10,
+        maximum: 1440,
+        description: '只在主会话空闲、且没有待办回复时才检查。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.focus.maxVideos': {
+        type: 'integer',
+        title: '每次拉几条投稿',
+        minimum: 1,
+        maximum: 30,
+        description: '默认 12。拉太多会多看几页评论区。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.focus.maxDailyActions': {
+        type: 'integer',
+        title: '每天最多为关注对象行动几次',
+        minimum: 0,
+        maximum: 50,
+        description: '单独一本账，不占普通回复/主动发言额度。',
         'x-hot': true,
       },
       'worlds.bili-watch.focus.allowMentions': {
@@ -277,11 +351,78 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
         description: '单独计账，不占普通额度，也不设单人次数上限。',
         'x-hot': true,
       },
+      'worlds.bili-watch.focus.replyExistingComments': {
+        type: 'boolean',
+        title: '连已有评论也回（不只是新的）',
+        description: '默认关。开着容易把老评论逐条翻出来回，建议先不开。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.focus.autoReplyIntervalMinutes': {
+        type: 'integer',
+        title: '自动回应的检查间隔（分钟）',
+        minimum: 2,
+        maximum: 240,
+        description: '开了「自动回应新评论」时用这个间隔，比普通检查更勤。',
+        'x-hot': true,
+      },
 
-      /* -------------------------------------------------- 6. 动态 */
+      /* -------------------------------------------------- 6. 推荐给我 */
+      'worlds.bili-watch.recommend.enabled': {
+        type: 'boolean',
+        title: '允许把喜欢的视频推荐给主人',
+        description:
+          '默认关。开着后，闲逛机会里会告诉鱼「今天还能推荐几次」和主人喜欢什么；' +
+          '鱼自己决定要不要推荐，在评论区 @ 主人说一句。清单只是参考，不硬性匹配。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.recommend.ownerUid': {
+        type: 'string',
+        title: '要 @ 的账号 UID',
+        description:
+          '**留空就复用上面「特别关注」填的 UID**（你已填 456764639）。' +
+          '也可以单填一个：必须是纯数字 UID，工具改不了这个值。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.recommend.ownerName': {
+        type: 'string',
+        title: '被 @ 的昵称',
+        description:
+          '留空会自动从联系人表按 UID 反查（例如「雅席」）。' +
+          '**B 站要求真实昵称**，填 `UID 456764639` 这种是 @ 不出来的。反查不到就填这里。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.recommend.likedList': {
+        type: 'string',
+        title: '主人喜欢什么（清单）',
+        description:
+          '每行一条：视频 BV 号、UP 主昵称、关键词都行，随便写。' +
+          '**只作为给鱼的参考**，不是过滤器 —— 它完全可以推荐清单外的东西。' +
+          '这段会原样出现在闲逛机会里，别写私密内容（会进模型上下文）。',
+        'x-multiline': true,
+        'x-hot': true,
+      },
+      'worlds.bili-watch.recommend.maxDaily': {
+        type: 'integer',
+        title: '每天最多推荐几次',
+        minimum: 0,
+        maximum: 30,
+        description: '单独一本账，不占普通回复/主动发言额度，也不占「@ 特别关注」的额度。设为 0 等于关。',
+        'x-hot': true,
+      },
+
+      /* -------------------------------------------------- 7. 动态 */
       'worlds.bili-watch.dynamics.enabled': {
         type: 'boolean',
         title: '启用动态（读 + 发）',
+        description: '关着的时候 bili_dynamic 会直接拒绝，不联网。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.dynamics.maxDailyReads': {
+        type: 'integer',
+        title: '每日最多读几次动态',
+        minimum: 0,
+        maximum: 200,
+        description: '读动态要走真实浏览器，比接口贵得多，所以单独限量。',
         'x-hot': true,
       },
       'worlds.bili-watch.dynamics.allowPublishing': {
@@ -295,12 +436,59 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
         title: '每日最多发几条动态',
         minimum: 0,
         maximum: 30,
+        description: '手动发的和自主发的共用这个上限。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.dynamics.minIntervalSec': {
+        type: 'integer',
+        title: '两条动态最小间隔（秒）',
+        minimum: 60,
+        maximum: 86400,
         'x-hot': true,
       },
       'worlds.bili-watch.dynamics.autonomousEnabled': {
         type: 'boolean',
         title: '空闲时自主发动态',
-        description: '默认关。开着且 allowPublishing 也开着才生效。',
+        description: '默认关。开着且 allowPublishing 也开着才生效；请确保主人接受它自己发帖。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.dynamics.autoMaxDaily': {
+        type: 'integer',
+        title: '自主发动态每天最多几条',
+        minimum: 0,
+        maximum: 10,
+        description: '不占手动额度之外的名额，但仍受「每日最多发几条动态」总上限约束。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.dynamics.autoMinIntervalMinutes': {
+        type: 'integer',
+        title: '自主发动态最小间隔（分钟）',
+        minimum: 30,
+        maximum: 10080,
+        description: '默认 360（6 小时）。别调太小 —— 那会变成刷屏机器人。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.dynamics.autoIdleMinutes': {
+        type: 'integer',
+        title: '空闲多少分钟后才自主发',
+        minimum: 5,
+        maximum: 720,
+        description: '这段时间内有人说话就不发。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.dynamics.autoStartHour': {
+        type: 'integer',
+        title: '只在几点之后发（0-23）',
+        minimum: 0,
+        maximum: 23,
+        description: '跨夜写：开始 22、结束 6 表示 22 点到次日 6 点。起止相同 = 全天。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.dynamics.autoEndHour': {
+        type: 'integer',
+        title: '只在几点之前发（0-23）',
+        minimum: 0,
+        maximum: 23,
         'x-hot': true,
       },
 
@@ -327,6 +515,32 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
         type: 'string',
         title: '语音 API 令牌',
         description: '本机服务通常不需要。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.asr.apiModel': {
+        type: 'string',
+        title: '语音 API 模型名',
+        description: '默认 whisper-1；兼容 OpenAI 协议的本地服务按它自己的名字填。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.asr.modelDir': {
+        type: 'string',
+        title: '本地语音模型目录',
+        description: '留空自动找桌宠自带的那套（sherpa-onnx sensevoice）。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.asr.sherpaPath': {
+        type: 'string',
+        title: 'sherpa-onnx-node 路径',
+        description: '留空按包名解析。装在别处时填绝对路径或包目录。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.asr.language': {
+        type: 'string',
+        title: '识别语言',
+        description:
+          '留空或 auto = 自动判断；也可以填 zh / en / ja / ko / yue。' +
+          '指定语种通常更准（尤其专有名词多的时候）。',
         'x-hot': true,
       },
     },

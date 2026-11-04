@@ -3,7 +3,7 @@
  *
  * ## 走哪条路（按优先级，全部本机、零外网）
  *
- * 1. **社交视窗已经配好的本地 sherpa 模型** —— 本机 `data/home/models/desktop-pet/`
+ * 1. **桌宠已经配好的本地 sherpa 模型** —— 本机 `data/home/models/desktop-pet/`
  *    下就有（桌宠自带语音输入用的同一套：sensevoice / paraformer）。
  * 2. **OpenAI 兼容的 `/audio/transcriptions`** —— 如果主人自己起了个本地服务
  *    （`~/.dsh/asr.json` 或配置里的 apiUrl），就走它。

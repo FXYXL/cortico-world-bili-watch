@@ -74,10 +74,18 @@ export interface PublicComment {
   replies: PublicComment[];
 }
 
-/** 一次通知（别人回复我 / @ 我）。 */
+/** 一次通知（别人回复我 / @ 我 / 主人评论区）。 */
 export interface InboxItem {
   /** `bilibili:<accountId>:<parent>` —— 用它去重，同一楼重复通知只留一条。 */
   id: string;
+  /**
+   * 单平台，但**必须写**。
+   *
+   * `store.rememberContact()` 曾经因为没有这个字段，`item.platform !== 'bilibili'`
+   * 恒真、联系人表永远是空的 —— 真机验证「迁移后 contacts 为 0」才发现。
+   * 现在统一由 service 填 `'bilibili'`，别再靠 `?? 'bilibili'` 兜底。
+   */
+  platform?: string;
   accountId: string;
   authorId: string;
   author: string;
@@ -85,10 +93,19 @@ export interface InboxItem {
   target: CommentTarget;
   occurredAt: number;
   status: 'pending' | 'handled';
-  notificationType: 'reply' | 'mention';
+  notificationType: 'reply' | 'mention' | 'focus-video' | 'focus-comment';
   url?: string;
   /** 什么时候该再看（`defer` 用）。 */
   retryAt?: string;
+  /** 已经投给模型了没有。**没有它就会每轮重投同一条待办**。 */
+  delivered?: boolean;
+  deliveredAt?: string;
+  /** 这条来自特别关注（主人评论区），有值就走 `focus` 那本账。 */
+  focusOwnerId?: string;
+  /** 主人评论区自动回应：单独计账，不占普通额度。 */
+  ownerAutoReply?: boolean;
+  /** 被本机规则直接收尾时的原因（`skip` / `limit` 等），面板会显示。 */
+  handling?: { kind: 'unsafe' | 'resource' | 'limit' | 'skip'; reason: string };
 }
 
 /** 一次发送的结局。**这五个状态不能混** —— 弄混就是重发或漏发。 */
@@ -110,6 +127,17 @@ export interface SendReceipt {
 
 export interface SendRecord {
   id: string;
+  /**
+   * 防重主键：`bilibili:<accountId>:<requestId>`。
+   *
+   * **必须落盘**。`store.operationSends()` 用 `(r.operationId ?? r.id) === id` 比对，
+   * 而新记录的 `id` 是随机 UUID —— 只写 `requestId` 不写 `operationId` 的话，
+   * 第一层防重会永远查不到（实测：reserve 一条后 `operationSends` 返回 `[]`），
+   * 同一 requestId 可以重复发同一条评论。
+   */
+  operationId?: string;
+  /** 单平台，但要写：`hasSend()` 早先因为缺这个字段恒返回 false。 */
+  platform?: string;
   /** 稳定的防重键。**同一个 requestId 只能有一次发送**。 */
   requestId: string;
   accountId: string;
@@ -126,12 +154,15 @@ export interface SendRecord {
   platformState?: number;
   inboxId?: string;
   roamId?: string;
-  /** 这条是回复通知还是主动发言 —— 两个额度账本靠它分开。 */
-  kind: 'reply' | 'proactive' | 'focus';
+  /** 这条是回复通知 / 主动发言 / 特别关注 / 推荐给主人 —— 四本账靠它分开。 */
+  kind: 'reply' | 'proactive' | 'focus' | 'recommend';
   /** 主人评论区自动回应单独计账。 */
   focusOwnerId?: string;
+  ownerAutoReply?: boolean;
   /** 这条发言里 @ 了谁（有就说明用掉了 @ 额度）。 */
   mention?: { id: string; name: string };
+  /** prepare 留下的凭据摘要（审计用）。 */
+  preparation?: PreparationNote;
 }
 
 /** B 站错误分类。**分类决定模型下一步做什么**，所以不能糊成一个 Error。 */
@@ -150,6 +181,64 @@ export interface NotificationPage {
   items: InboxItem[];
   cursor?: { id: string; time: number };
   done: boolean;
+}
+
+/* ------------------------------------------------------------------ 社交侧 */
+/* 下面这几个原本定义在 `core/platform.ts`（多平台版本带过来的）。            */
+/* 现在统一放这里，`platform.ts` 只做 re-export —— 两份同名类型已经            */
+/* 造成过一次真实 bug（`InboxItem.platform` 缺失导致联系人表恒为空）。        */
+
+/** 归档过的作品（面板按它显示卡片标题）。 */
+export interface PublicVideo {
+  ownerId?: string;
+  publishedAt?: number;
+  aid: string;
+  id: string;
+  title: string;
+  url: string;
+  author?: string;
+  description?: string;
+  updatedAt: string;
+  observation?: string;
+  unavailable?: boolean;
+}
+
+/** 被 @ 的对象。**必须是核验过的 UID**，不靠文本 @。 */
+export interface FocusMention {
+  id: string;
+  name: string;
+}
+
+/** prepare 产出的凭据摘要。 */
+export interface PreparationNote {
+  mention?: FocusMention;
+  judgment?: import('../social/judgment.ts').ParticipationJudgment;
+  briefId: string;
+  purpose: string;
+  advice: string[];
+  parent?: PublicComment;
+  video?: PublicVideo;
+}
+
+/** 一份完整的接话凭据（存进 `briefs[]`）。 */
+export interface ConversationBrief {
+  id: string;
+  platform?: string;
+  accountId: string;
+  target: CommentTarget;
+  createdAt: string;
+  purpose: string;
+  draft: string;
+  /** prepare 时明确要 @ 谁（`mentionFocus`）。publish 只认这一份。 */
+  mention?: FocusMention;
+  video?: PublicVideo;
+  videoTitle?: string;
+  parent?: PublicComment;
+  nearby: Array<Pick<PublicComment, 'author' | 'text'>>;
+  recentOwn: string[];
+  advice: string[];
+  guidance: string[];
+  judgment?: import('../social/judgment.ts').ParticipationJudgment;
 }
 
 export const isHttpUrl = (v: string): boolean => /^https?:\/\//i.test(String(v ?? '').trim());

@@ -9,8 +9,7 @@
  * `video_*` 保持和 `cortico-world-video-reader` 一致 —— 引擎生成的清单文本里
  * 硬编码了 `video_zoom({ video, cellId: 7 })` 这种句子，改名会让提示指向不存在的工具。
  *
- * `bili_*` 是我们自己的社交面。和社交视窗的 `socialmedia_*` 不撞名，
- * 装在一起也不会互相覆盖。
+ * `bili_*` 是社交面。命名避开其它插件常用的 `socialmedia_*`，装在一起也不会互相覆盖。
  */
 
 import type { ToolDef } from 'cortico/core/types.ts';
@@ -92,6 +91,11 @@ const readTools = [
       '',
       'The result is direct observation of pixels and subtitles only. It never claims to have watched',
       'the whole video or listened to the audio track.',
+      '',
+      'NOTE: if the receipt would be too long, the per-cell subtitle detail automatically steps',
+      'down (high -> med -> low) while images and cell numbers stay unchanged. The receipt says',
+      'which level was used. To read one cell in full, call video_storyboard with',
+      'cellRange: [n, n] and textOnly: true.',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -356,6 +360,10 @@ const socialTools = [
       'as `cursor` for the next page (page numbers do not work for top-level replies - they skip',
       'and repeat). A root thread (root != 0) is paginated with `page` instead.',
       '',
+      '**`target.oid` must be the numeric aid.** Get it from `bili_video` first — do not pass an',
+      'empty oid, a BV number, or a guessed id (that call is rejected). `root`/`parent` are',
+      'strings; use "0" for a new top-level comment.',
+      '',
       '**Reuse the returned `target` identifiers to reply to the right person**, even without an @',
       'notification. A child target keeps the original root and uses its own id as parent.',
       'Read relevant context first; you do not need to read every page.',
@@ -541,6 +549,9 @@ const socialTools = [
       'To publish: action=prepare with text, review the returned draft, then action=publish with',
       '`draftId` only. A separate local publishing permission is required. Never change text to retry',
       'an ambiguous send.',
+      '',
+      'When a bili.dynamic opportunity arrives, pass its `offerId` to prepare — that is the only way',
+      'the autonomous quota is charged; publishing without it is refused.',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -551,6 +562,15 @@ const socialTools = [
         dynamic: { type: 'string', maxLength: 240, description: 'Canonical dynamic URL or id.' },
         text: { type: 'string', maxLength: 500, description: 'For action=prepare: the body to post.' },
         draftId: { type: 'string', maxLength: 80, description: 'For action=publish.' },
+        offerId: {
+          type: 'string',
+          maxLength: 80,
+          description: 'For action=prepare when answering a bili.dynamic opportunity.',
+        },
+        mentionFocus: {
+          type: 'boolean',
+          description: 'For action=prepare: @ the locally bound focus owner. Default false.',
+        },
         limit: { type: 'integer', minimum: 1, maximum: 5 },
       },
       required: ['action'],
@@ -563,6 +583,44 @@ const socialTools = [
       'Read connection state, login, unread count, quorum usage (three separate ledgers), ' +
       'and ambiguous send count. **This does not change any configuration.**',
     parameters: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  {
+    name: 'bili_recommend',
+    tags: ['read', 'write'],
+    description: [
+      'Recommend a video you genuinely think the operator will like: post ONE new comment under that',
+      'video, @ the operator\'s account, and say something to them (or about the video).',
+      '',
+      'action=status: how many remain today, the operator\'s *reference* list of likes, the account',
+      'that will be @-ed, and how many seconds until the next comment is allowed. **The list is a',
+      'hint, never a filter** — recommend anything you honestly liked, and skip when nothing fits.',
+      '',
+      'action=prepare: give target + draft. It ONLY confirms which video and what you intend to say',
+      '(no comment listing, no tone advice) and returns a briefId. action=publish: give briefId +',
+      'the exact same text — **requestId is generated for you, do not invent one**.',
+      '',
+      'The @ is added automatically by local config: **never type @ yourself**.',
+      'The @ target comes from local config only — you cannot choose who gets @-ed.',
+      'A separate daily quota applies; transport must be api; one new comment per video.',
+      'Changing the draft requires a fresh prepare (kept on purpose). If a recent comment blocks',
+      'you, the receipt says exactly how many seconds to wait — reuse the same briefId, do not',
+      'change the text or invent a new id. **If you plan to recommend this round, make it your',
+      'first public comment** (the min-interval rule blocks a second comment right after another).',
+      'Replying to other people is entirely optional — recommending only is fine.',
+    ].join('\n'),
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: { type: 'string', enum: ['status', 'prepare', 'publish'] },
+        target: { type: 'object', description: 'For prepare: the video target (oid = numeric aid).' },
+        draft: { type: 'string', maxLength: 1000, description: 'For prepare: what you intend to say, without @.' },
+        briefId: { type: 'string', maxLength: 80, description: 'For publish: the briefId from prepare.' },
+        text: { type: 'string', maxLength: 1000, description: 'For publish: the exact draft text.' },
+        roamId: { type: 'string', maxLength: 80, description: 'Optional: carry the current roamId.' },
+      },
+      required: ['action'],
+    },
   },
 ];
 
@@ -588,17 +646,28 @@ export const TOOL_SUMMARY: Record<string, { zh: string; en: string }> = {
   bili_focus: { zh: '读特别关注账号的近期作品。', en: 'Reads the focus account and its recent works.' },
   bili_dynamic: { zh: '读/发 B 站动态。', en: 'Reads or publishes Bilibili dynamics.' },
   bili_status: { zh: '读连接状态与三本额度账。', en: 'Reads connection state and the three ledgers.' },
+  bili_recommend: { zh: '把喜欢的视频 @ 给主人（独立次数，清单只是参考）。', en: 'Recommends a video by @-ing the operator.' },
 };
 
 /** 我们发出的事件（给 describe.json 用，也是运行时真实推送的类型）。 */
 export const EVENT_TYPES = [
   {
     type: 'bili.inbox',
-    description: { zh: '有人在评论或动态里回复 / @ 了你。', en: 'Someone replied to or mentioned you.' },
+    description: {
+      zh: '有人在评论或动态里回复 / @ 了你，或特别关注有了新作品。',
+      en: 'Someone replied to or mentioned you, or a focus account posted.',
+    },
   },
   {
     type: 'bili.roam',
     description: { zh: '给了一个闲逛机会，带 roamId 与限额。', en: 'A roaming opportunity with an id and limits.' },
+  },
+  {
+    type: 'bili.dynamic',
+    description: {
+      zh: '给了一个可放弃的主动发动态机会，带 offerId。',
+      en: 'A skippable autonomous dynamic opportunity with an offer id.',
+    },
   },
   {
     type: 'bili.state',

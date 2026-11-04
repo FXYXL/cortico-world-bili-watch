@@ -1,8 +1,7 @@
 /**
  * social/roaming.ts — 闲逛（自主去看 B 站）。
  *
- * 从社交视窗的 `roaming.ts`（307 行）重写。**重写的部分只有一个：平台维度。**
- * 其它逻辑 —— 预算、超时、让位、配额 —— **一条都没改**，因为它们都是精心设计的。
+ * 按单平台重写过：去掉平台维度，**预算、超时、让位、配额一条没改** —— 那些都是踩出来的。
  *
  * ## 这个文件存在的理由
  *
@@ -344,9 +343,29 @@ export class Roaming {
    *   2. 本轮发言数没超
    *   3. 今日主动发言数没超（**这是主动账本，不影响通知回复**）
    */
-  canPublish(id: string | undefined, oid: string): void {
+  /**
+   * 发言前检查。`allowFinished` 只给**推荐补发**用：
+   * 本轮 prepare 过、只是被评论间隔挡住的推荐，finish 后仍能用同一份凭据补发，
+   * 不必去掉 roamId 重新 prepare。轮次不存在/超时依旧拒绝，预算检查一条不少。
+   *
+   * **关键**：`allowFinished` 是"放宽到**也**允许 finished/skipped"，不是"只允许终态"。
+   * 闲逛进行中（offered/active）才是推荐该发的时候，必须照常放行；上一版写成
+   * "仅终态可发"导致带 roamId 的推荐 publish 在 active 阶段被挡，鱼只能 finish
+   * 后去掉 roamId 重 prepare —— 正好是它本来要解决的。
+   */
+  canPublish(id: string | undefined, oid: string, allowFinished = false): void {
     if (!id) return;
-    const r = this.session(id);
+    const r = allowFinished
+      ? this.store.roams().find((x) => x.id === id)
+      : this.session(id);
+    if (!r) throw new Error('闲逛记录不存在');
+    if (r.status === 'expired') throw new Error('本轮闲逛已超时，请留待下一次机会');
+    const allowed = allowFinished
+      ? ['offered', 'active', 'finished', 'skipped']
+      : ['offered', 'active'];
+    if (!allowed.includes(r.status)) {
+      throw new Error(allowFinished ? '本轮闲逛已结束' : '本轮闲逛已结束');
+    }
     const p = this.policy();
 
     if (!r.videos.some((v) => v.aid === oid)) {
