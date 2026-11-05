@@ -551,9 +551,13 @@ export class WatchBrowser {
   ): Promise<string | null> {
     const page = this.page;
     if (!page || page.isClosed()) return null;
+    // ⚠ `page.evaluate` 在 **playwright 里只接受一个参数**（多参数是 puppeteer 的签名）。
+    // 这里踩过：传 6 个参数 → nc/nr/w/h/q 全 undefined → canvas 尺寸 NaN → 拼图
+    // 一直返回 null，而 look（字符串内联参数）正常 —— 观察帧全灭的真凶就是这里。
     return (await page
       .evaluate(
-        async (jpegs, nc, nr, w, h, q) => {
+        async (a: { jpegs: string[]; nc: number; nr: number; w: number; h: number; q: number }) => {
+          const { jpegs, nc, nr, w, h, q } = a;
           const c = document.createElement('canvas');
           c.width = nc * w;
           c.height = nr * h;
@@ -576,12 +580,7 @@ export class WatchBrowser {
           );
           return c.toDataURL('image/jpeg', q).split(',')[1] ?? '';
         },
-        [...cells],
-        cols,
-        rows,
-        cellW,
-        cellH,
-        quality,
+        { jpegs: [...cells], nc: cols, nr: rows, w: cellW, h: cellH, q: quality },
       )
       .catch(() => null)) as string | null;
   }
@@ -597,6 +596,26 @@ export class WatchBrowser {
     this.cdp = null;
     if (this.process && this.process.exitCode === null) this.process.kill();
     this.process = null;
+  }
+
+  /**
+   * 诊断用：原始执行一段页面脚本，**把异常原文带回来**。
+   * sample 的失败被静默吞掉过一整轮，就是因为它只返回 null。
+   */
+  async evaluateRaw<T = unknown>(script: string): Promise<{ ok: boolean; value?: T; error?: string }> {
+    const page = this.page;
+    if (!page || page.isClosed()) return { ok: false, error: 'no page' };
+    try {
+      const value = (await page.evaluate(script)) as T;
+      return { ok: true, value };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+  }
+
+  /** 诊断用：跑一次 SAMPLE_FRAME 并带出原始异常。 */
+  async debugSample(cellLong: number, cellShort: number, quality: number): Promise<{ ok: boolean; value?: Sample; error?: string }> {
+    return this.evaluateRaw<Sample>(`(${SAMPLE_FRAME})(${cellLong}, ${cellShort}, ${quality})`);
   }
 
   /** 会话指纹（日志用）。 */
