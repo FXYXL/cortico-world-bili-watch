@@ -451,6 +451,14 @@ var BILI_WATCH_CONFIG_GROUP = {
         maximum: 480,
         description: "\u8D85\u8FC7\u540E\u81EA\u52A8\u6682\u505C\u89C2\u5BDF\uFF08\u7A97\u53E3\u4E0D\u5173\uFF09\uFF0C\u9632\u65E0\u4EBA\u503C\u5B88\u70E7 token\u30020 = \u4E0D\u9650\u3002"
       },
+      "worlds.bili-watch.watch.idlePauseMinutes": {
+        type: "integer",
+        title: "\u4E3B\u4EBA\u6CA1\u52A8\u9759\u5C31\u81EA\u52A8\u6682\u505C\uFF08\u5206\u949F\uFF09",
+        minimum: 0,
+        maximum: 120,
+        description: "\u8FDE\u7EED\u8FD9\u4E48\u4E45\u6CA1\u6709\u4E3B\u4EBA\u8BF4\u8BDD\uFF0C\u81EA\u52A8\u628A\u7247\u5B50\u6682\u505C\uFF08\u7A97\u53E3\u4E0D\u5173\uFF09\uFF0C\u5E76\u544A\u8BC9\u9C7C\u30020 = \u4E0D\u81EA\u52A8\u505C\u3002\u9ED8\u8BA4 10 \u5206\u949F\u3002",
+        "x-hot": true
+      },
       "worlds.bili-watch.watch.windowWidth": {
         type: "integer",
         title: "\u7A97\u53E3\u5BBD",
@@ -730,7 +738,8 @@ var BILI_WATCH_DEFAULTS = {
     maxFrames: 4,
     cellWidth: 480,
     cellHeight: 270,
-    maxWatchMinutes: 120
+    maxWatchMinutes: 120,
+    idlePauseMinutes: 10
   },
   media: {
     mediaMaxMB: 300,

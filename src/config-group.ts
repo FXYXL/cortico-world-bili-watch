@@ -508,6 +508,16 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
         maximum: 480,
         description: '超过后自动暂停观察（窗口不关），防无人值守烧 token。0 = 不限。',
       },
+      'worlds.bili-watch.watch.idlePauseMinutes': {
+        type: 'integer',
+        title: '主人没动静就自动暂停（分钟）',
+        minimum: 0,
+        maximum: 120,
+        description:
+          '连续这么久没有主人说话，自动把片子暂停（窗口不关），并告诉鱼。0 = 不自动停。' +
+          '默认 10 分钟。',
+        'x-hot': true,
+      },
       'worlds.bili-watch.watch.windowWidth': {
         type: 'integer',
         title: '窗口宽',

@@ -270,6 +270,8 @@ export interface BiliWatchConfig {
     cellHeight: number;
     /** 陪看超过这个分钟数自动暂停观察（窗口不关）。0 = 不限。 */
     maxWatchMinutes: number;
+    /** 连续多少分钟没有主人说话就自动暂停播放（窗口不关）。0 = 不自动停。 */
+    idlePauseMinutes: number;
   };
 
   /** 媒体与额度 */
@@ -399,6 +401,7 @@ export const BILI_WATCH_DEFAULTS: BiliWatchConfig = {
     cellWidth: 480,
     cellHeight: 270,
     maxWatchMinutes: 120,
+    idlePauseMinutes: 10,
   },
 
   media: {

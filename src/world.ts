@@ -157,23 +157,48 @@ export class BiliWatchWorld implements World {
         blackLuma: 24,
         captureFps: 1,
         maxWatchMinutes: this.cfg().watch.maxWatchMinutes,
+        idlePauseMinutes: this.cfg().watch.idlePauseMinutes,
       }),
+      // 主人在不在场：查最近 idlePauseMinutes 分钟有没有真人消息（与让位判据同源）
+      humanAround: () => {
+        try {
+          const mins = Math.max(1, Number(this.cfg().watch.idlePauseMinutes) || 10);
+          const recent = this.host?.store.range({
+            fromTs: new Date(Date.now() - mins * 60_000).toISOString(),
+            origin: 'external',
+            limit: 50,
+          }) ?? [];
+          return recent.some(
+            (e) =>
+              e.source !== this.id &&
+              !e.tags?.includes('speak') &&
+              /^(desktop-pet\.(message|vision|transcript|voice)|qq\.|starpost\.message)\b/.test(e.type),
+          );
+        } catch {
+          return true; // 查不到就当有人在：宁可不停
+        }
+      },
       cookie: () => this.cookie(),
       // 观察帧走 pushEvent（落库即投）：pushDeferred 的 deferred 项不持久化、
       // 空闲时没消费者就一直攒，攒到窗口关了 render 一跑 state=off 全丢弃——
       // 真机首秀 14 个观察帧 0 条到达就是这条路径。
       deliver: (rendered) => {
-        this.host?.pushEvent(
-          {
-            type: 'bili.watch',
-            source: this.id,
-            origin: 'external',
-            senderKey: 'bili-watch.watch',
-            ts: new Date().toISOString(),
-            text: rendered.text,
-          },
-          { blobs: rendered.blobs.length ? rendered.blobs : undefined, trigger: 'debounce' },
-        );
+        try {
+          this.host?.pushEvent(
+            {
+              type: 'bili.watch',
+              source: this.id,
+              origin: 'external',
+              senderKey: 'bili-watch.watch',
+              ts: new Date().toISOString(),
+              text: rendered.text,
+            },
+            { blobs: rendered.blobs.length ? rendered.blobs : undefined, trigger: 'debounce' },
+          );
+        } catch (e) {
+          // 投递异常绝不能静默——「观察帧不来」最难排查的就是这一层
+          this.log(`陪看事件投递失败：${(e as Error).message}`);
+        }
       },
       log: (m) => this.log(m),
     });

@@ -47,6 +47,8 @@ export interface CoWatchConfig {
   blackLuma: number;
   captureFps: number;
   maxWatchMinutes: number;
+  /** 连续多少分钟没有主人说话就自动暂停播放（0 = 不自动停）。 */
+  idlePauseMinutes: number;
 }
 
 export interface CoWatchOptions {
@@ -62,6 +64,8 @@ export interface CoWatchOptions {
    * 实证过能到达模型的路径。
    */
   deliver: (rendered: { text: string; blobs: FrameBlob[] }) => void;
+  /** 最近这几分钟有没有主人在说话（world 查事件流实现）。 */
+  humanAround: () => boolean;
   log: (msg: string) => void;
 }
 
@@ -129,6 +133,10 @@ export class CoWatch {
   /** 播放状态边沿检测（给主人/鱼的回执：暂停了、播完了）。 */
   private prevPaused: boolean | null = null;
   private prevEnded = false;
+  private sampleFails = 0;
+  /** 空闲自动暂停：累计的"没有主人在场"分钟数 + 上次检查的分钟。 */
+  private idleMinutesIdle = 0;
+  private lastIdleCheckMin = 0;
 
   constructor(opts: CoWatchOptions) {
     this.o = opts;
@@ -360,7 +368,15 @@ export class CoWatch {
     if (this.state !== 'watching') return;
     await this.checkPlaybackEdge();
     const s = await this.browser.sample(this.cfg().cellWidth, this.cfg().cellHeight, this.cfg().jpegQuality);
-    if (!s || !s.gray?.length) return;
+    if (!s || !s.gray?.length) {
+      // 采样失败是「观察帧永远不来」的头号嫌疑：连续失败打一次日志，别静默
+      this.sampleFails += 1;
+      if (this.sampleFails === 1 || this.sampleFails % 60 === 0) {
+        this.o.log(`采样失败 ${this.sampleFails} 次（播放器没就绪 / 页面抽帧被拒？）`);
+      }
+      return;
+    }
+    this.sampleFails = 0;
     const last = this.samples.at(-1);
     if (last && s.t <= last.t) return;
     const luma = s.gray.reduce((a, b) => a + b, 0) / s.gray.length;
@@ -390,6 +406,31 @@ export class CoWatch {
   private async checkPlaybackEdge(): Promise<void> {
     const pb = await this.browser.playback();
     if (!pb) return;
+    // 空闲自动暂停：连续 idlePauseMinutes 没有主人说话 → 把片子停下等她回来
+    // （不是停观察；画面停在当前点，回来一句 play 就继续）
+    const idleMin = this.cfg().idlePauseMinutes;
+    if (idleMin > 0 && !pb.paused && !pb.ended) {
+      const key = Math.floor(Date.now() / 60_000);
+      if (key !== this.lastIdleCheckMin) {
+        this.lastIdleCheckMin = key;
+        if (!this.o.humanAround()) {
+          this.idleMinutesIdle += 1;
+          if (this.idleMinutesIdle >= idleMin) {
+            await this.browser.pause().catch(() => {});
+            this.idleMinutesIdle = 0;
+            this.o.deliver({
+              text:
+                `[陪看] 主人已经 ${idleMin} 分钟没动静了，我先把片子暂停在 ${clock(pb.t)}。` +
+                '画面还开着，他回来喊一声 play 就继续；也可以跟他说一句你看到哪儿了。',
+              blobs: [],
+            });
+            return;
+          }
+        } else {
+          this.idleMinutesIdle = 0;
+        }
+      }
+    }
     const wasPaused = this.prevPaused;
     const wasEnded = this.prevEnded;
     this.prevPaused = pb.paused;
@@ -462,6 +503,9 @@ export class CoWatch {
       const t0 = this.lastObservedT;
       const pool = this.samples.filter((s) => s.t > t0);
       if (!pool.length) {
+        this.o.log(
+          `观察帧跳过：候选池空（samples=${this.samples.length}，t0=${t0}，采样失败累计 ${this.sampleFails}）`,
+        );
         this.armObservation();
         return null;
       }
@@ -487,6 +531,7 @@ export class CoWatch {
         this.cfg().jpegQuality,
       );
       if (!jpeg) {
+        this.o.log('观察帧跳过：页面拼图返回空（montage null）');
         this.armObservation();
         return null;
       }
