@@ -53,12 +53,15 @@ export interface CoWatchOptions {
   dataDir: string;
   config: () => CoWatchConfig;
   cookie: () => string;
-  /** 宿主的 pushDeferred：render 在投递时才执行（debounce 后）。 */
-  defer: (spec: {
-    type: string;
-    senderKey: string;
-    render: () => Promise<{ text: string; blobs: Array<{ bytes: Uint8Array; mime: string; name: string; fallbackText: string }> } | null>;
-  }) => void;
+  /**
+   * 投递一条已成型的观察帧/回执（world 实现 = pushEvent + blobs + ts）。
+   *
+   * **不走 pushDeferred**：deferred 队列项不持久化、空闲时没有消费者就攒着，
+   * 攒到窗口关了 render 一跑 state=off 全部丢弃——真机首秀里观察帧就是
+   * 这样全军覆没的（0 条）。pushEvent 落库即投，是被 bili.inbox/dm/roam
+   * 实证过能到达模型的路径。
+   */
+  deliver: (rendered: { text: string; blobs: FrameBlob[] }) => void;
   log: (msg: string) => void;
 }
 
@@ -123,6 +126,9 @@ export class CoWatch {
   private autoPaused = false;
   private framesToday = 0;
   private framesTodayKey = '';
+  /** 播放状态边沿检测（给主人/鱼的回执：暂停了、播完了）。 */
+  private prevPaused: boolean | null = null;
+  private prevEnded = false;
 
   constructor(opts: CoWatchOptions) {
     this.o = opts;
@@ -146,6 +152,16 @@ export class CoWatch {
           this.stopTimers();
           this.state = 'off';
           this.o.log('陪看窗口丢失，回到 off');
+          // 鱼得知道窗口没了，不然她还以为在陪看
+          try {
+            this.o.deliver({
+              text: '[陪看] 共同窗口已关闭（被手动关掉或浏览器退出）。这轮陪看到此为止——' +
+                '想收尾就跟主人说一句你印象最深的画面；下次他说「陪我看xxx」再开。',
+              blobs: [],
+            });
+          } catch {
+            /* 投递失败就算了 */
+          }
         }
       },
       log: opts.log,
@@ -342,6 +358,7 @@ export class CoWatch {
 
   private async capture(): Promise<void> {
     if (this.state !== 'watching') return;
+    await this.checkPlaybackEdge();
     const s = await this.browser.sample(this.cfg().cellWidth, this.cfg().cellHeight, this.cfg().jpegQuality);
     if (!s || !s.gray?.length) return;
     const last = this.samples.at(-1);
@@ -365,19 +382,56 @@ export class CoWatch {
     if (this.samples.length > SAMPLE_CAP) this.samples.splice(0, this.samples.length - SAMPLE_CAP);
   }
 
+  /**
+   * 播放状态边沿 → 轻量回执（不带图）：暂停、播完。
+   * 鱼的原话：「pause 和播完的时候给我个回执，这样我至少知道该说话了。」
+   * 播完时顺手停观察循环（画面停在片尾，没有新内容可看了）。
+   */
+  private async checkPlaybackEdge(): Promise<void> {
+    const pb = await this.browser.playback();
+    if (!pb) return;
+    const wasPaused = this.prevPaused;
+    const wasEnded = this.prevEnded;
+    this.prevPaused = pb.paused;
+    this.prevEnded = pb.ended;
+    if (this.prevPaused === wasPaused && this.prevEnded === wasEnded) return;
+    if (pb.ended && !wasEnded) {
+      this.stopTimers();
+      this.state = 'paused';
+      this.o.deliver({
+        text:
+          `[陪看] 《${this.info?.title ?? '视频'}》播完了（${clock(this.info?.duration ?? pb.duration)}）。` +
+          '观察已停。跟主人聊聊这片子——你看到的画面、字幕、弹幕都还在上下文里；结束就 exit。',
+        blobs: [],
+      });
+      return;
+    }
+    if (pb.paused && !wasPaused && !pb.ended) {
+      this.o.deliver({
+        text:
+          `[陪看] 视频被暂停在 ${clock(pb.t)}（可能是主人按的）。` +
+          '这是一个天然的说话时机：对当前画面/字幕/弹幕说点什么，或者问主人要不要继续。',
+        blobs: [],
+      });
+      return;
+    }
+    if (!pb.paused && wasPaused && !pb.ended) {
+      this.o.deliver({ text: `[陪看] 继续播放了（从 ${clock(pb.t)}）。`, blobs: [] });
+    }
+  }
+
   private armObservation(): void {
-    if (this.observeTimer || this.observeQueued || this.state !== 'watching') return;
+    if (this.observeTimer || this.state !== 'watching') return;
     const wait = Math.max(0, this.cfg().observeIntervalSec * 1000 - (Date.now() - this.lastObservedAt));
     this.observeTimer = setTimeout(() => {
       this.observeTimer = null;
       if (this.state !== 'watching') return;
-      this.observeQueued = true;
-      // debounce：主人正在说话时宿主合并/延后，画面在池子里不丢
-      this.o.defer({
-        type: 'bili.watch',
-        senderKey: 'bili-watch.watch',
-        render: () => this.renderScene(),
-      });
+      // 到点立刻构建并投递：不攒 deferred（见 deliver 注释）。构建里任何失败都自带重试。
+      void this.renderScene()
+        .then((r) => {
+          if (r) this.o.deliver(r);
+        })
+        .catch((e) => this.o.log(`观察帧构建失败：${(e as Error).message}`));
     }, wait);
     this.observeTimer.unref?.();
   }

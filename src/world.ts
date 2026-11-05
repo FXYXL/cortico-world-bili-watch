@@ -159,20 +159,20 @@ export class BiliWatchWorld implements World {
         maxWatchMinutes: this.cfg().watch.maxWatchMinutes,
       }),
       cookie: () => this.cookie(),
-      defer: (spec) => {
-        this.host?.pushDeferred(
+      // 观察帧走 pushEvent（落库即投）：pushDeferred 的 deferred 项不持久化、
+      // 空闲时没消费者就一直攒，攒到窗口关了 render 一跑 state=off 全丢弃——
+      // 真机首秀 14 个观察帧 0 条到达就是这条路径。
+      deliver: (rendered) => {
+        this.host?.pushEvent(
           {
-            type: spec.type,
+            type: 'bili.watch',
             source: this.id,
-            senderKey: spec.senderKey,
             origin: 'external',
-            render: async () => {
-              const r = await spec.render();
-              if (!r) return null;
-              return { text: r.text, blobs: r.blobs };
-            },
+            senderKey: 'bili-watch.watch',
+            ts: new Date().toISOString(),
+            text: rendered.text,
           },
-          { trigger: 'debounce' },
+          { blobs: rendered.blobs.length ? rendered.blobs : undefined, trigger: 'debounce' },
         );
       },
       log: (m) => this.log(m),
