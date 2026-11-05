@@ -5,7 +5,6 @@ media/
 state/
 *.log
 .env
-.npmrc
 cookies.txt
 .DS_Store
 Thumbs.db
@@ -13,3 +12,4 @@ Thumbs.db
 pnpm-lock.yaml
 package-lock.json
 SPEC.md
+.npmrc

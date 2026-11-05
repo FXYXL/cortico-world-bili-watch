@@ -1,0 +1,10 @@
+# 凭据：绝不能进包（publish 时本地会有 .npmrc）
+.npmrc
+.npmrc.*
+# 开发杂项
+.git
+.tmpdiag
+docs
+node_modules
+*.log
+.tmp-*
