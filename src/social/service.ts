@@ -601,7 +601,11 @@ export class BiliService {
       const used = this.usedToday('recommend', accountId);
       const limit = Math.max(0, Number(r?.maxDaily) || 0);
       if (!r?.enabled || used >= limit) {
-        throw new PublicReplySkipped(`今日推荐额度已用完（${used}/${limit}），明天再来。`);
+        throw new PublicReplySkipped(
+          `今日推荐额度已用完（已用 ${used} 次 / 上限 ${limit} 次` +
+            (used > limit ? '，上限比已用次数小——可能被调小过' : '') +
+            '），明天再来。',
+        );
       }
       // 不 return：下面「两条评论最小间隔」照样生效，避免连着刷屏
     } else {

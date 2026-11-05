@@ -774,7 +774,8 @@ export class BiliWatchWorld implements World {
       .slice(0, 12);
     return [
       '',
-      `【推荐给主人】今天还能推荐 ${st.remaining} 次（上限 ${st.maxDaily}）。` +
+      `【推荐给主人】今天还能推荐 ${st.remaining} 次（上限 ${st.maxDaily}，` +
+        '**这是打包这句时的数字，以 prepare 返回的实际剩余为准**）。' +
         '逛到真心觉得主人会喜欢的视频，`bili_recommend({ action: "status" })` 看清单，' +
         '再 prepare → publish：会在评论区 @ 主人说一句，正文写给他看的话或评价都行。',
       '主人喜欢什么（**只是参考，不是任务清单**，不用照着找，也不必凑次数）：' +
