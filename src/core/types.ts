@@ -231,6 +231,12 @@ export interface ConversationBrief {
   draft: string;
   /** prepare 时明确要 @ 谁（`mentionFocus`）。publish 只认这一份。 */
   mention?: FocusMention;
+  /**
+   * 该回给谁（平台账号 id）。来自收件箱的 authorId —— 收到通知那一刻就确定了。
+   * 存进凭据是因为 publish 常常只带 briefId：那时回头读楼中楼找父评论作者
+   * 经常找不到（父评论排在最后一页），会把能回的楼卡成「暂未取得身份」。
+   */
+  recipientId?: string;
   video?: PublicVideo;
   videoTitle?: string;
   parent?: PublicComment;

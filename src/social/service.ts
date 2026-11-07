@@ -199,6 +199,26 @@ export class BiliService {
     };
   }
 
+  /**
+   * 这条视频是否已经推荐给主人（只算成功发出的）。
+   *
+   * 为什么要单独查：推荐的 requestId 从 briefId 派生，每次 prepare 都是新键 ——
+   * 四层防重一层都命中不了。实测 11-06 06:35 和 11-08 00:23 把同一条
+   * 《免费live2D模型》推了两次，主人连收两条 @。
+   */
+  recommendAlreadySent(accountId: string, oid: string) {
+    return this.d.store
+      .outbox()
+      .filter(
+        (r) =>
+          r.accountId === accountId &&
+          r.kind === 'recommend' &&
+          r.target.oid === oid &&
+          r.status !== 'rejected',
+      )
+      .at(-1);
+  }
+
   /* ---------------------------------------------------------------- 连接 */
 
   /** 连上并核对账号。 */
@@ -556,19 +576,21 @@ export class BiliService {
     const cached = this.d.store.comment(target)?.authorId;
     if (cached) return cached;
     if (target.parent === '0') return undefined;
-    try {
-      const page = await readComments(
-        this.d.client(),
-        { ...target, parent: '0' },
-        1,
-        signal,
-      );
-      this.d.store.rememberComments(page);
-      return this.d.store.comment(target)?.authorId;
-    } catch {
-      // 读不到父楼不是"不能发"的理由，但下面会因为没有 recipientId 而拒绝
-      return undefined;
+    // 楼中楼按时间正序分页 —— 刚回复的那条（也就是我们要找的 parent）
+    // **永远在最后一页**。只读第 1 页等于永远找不到，所以往下翻几页。
+    for (let page = 1; page <= 3; page++) {
+      try {
+        const r = await readComments(this.d.client(), { ...target, parent: '0' }, page, signal);
+        this.d.store.rememberComments(r);
+        const hit = this.d.store.comment(target)?.authorId;
+        if (hit) return hit;
+        if (!r.items?.length) break;
+      } catch {
+        // 读不到父楼不是"不能发"的理由，调用方会用 recipientId 兜底或明确拒绝
+        break;
+      }
     }
+    return this.d.store.comment(target)?.authorId;
   }
 
   private assertQuota(
@@ -700,7 +722,11 @@ export class BiliService {
 
     // 接楼必须有 recipientId：拿不到就不发，绝不绕过单人上限
     if (!input.inboxId && target.parent !== '0') {
-      recipientId = await this.parentAuthor(target, signal);
+      // 凭据里记着"回给谁"就先信它（来自收件箱的 authorId，收到通知那刻就确定了）。
+      // 只拿 briefId 来发时，这里会回头读楼中楼找父评论作者 —— 而父评论通常是
+      // **最新的那条，排在最后一页**，第一页永远读不到，于是明明能回的楼被卡成
+      // 「暂未取得对方平台账号身份」（实测：2026-11-08 01:2x 缘梦幻境那条）。
+      recipientId = brief?.recipientId ?? (await this.parentAuthor(target, signal));
       if (!recipientId || !/^[1-9]\d*$/.test(recipientId)) {
         throw new PublicReplySkipped(
           '暂未取得对方平台账号身份，本次不发；先读清原楼层（bili_comments）再来，不换目标绕过每人上限。',

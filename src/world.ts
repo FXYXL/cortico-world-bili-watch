@@ -1825,6 +1825,11 @@ export class BiliWatchWorld implements World {
     let parentText = '';
     let parentWriter = '';
     let focusOwnerId: string | undefined;
+    // 通知回复的"回给谁"在收到通知那一刻就是确定的（item.authorId）。
+    // 必须存进凭据：publish 只拿 briefId 时已经没有 inbox 了，以前只能
+    // 回头去读楼中楼找父评论作者 —— 而父评论经常排在最后一页，第一页读不到，
+    // 于是发不出去（实测：缘梦幻境那条报「暂未取得对方平台账号身份」）。
+    let recipientId: string | undefined;
     if (args.inboxId) {
       const item = this.store.getInbox(String(args.inboxId));
       if (!item) throw new Error('收件箱消息不存在');
@@ -1832,6 +1837,7 @@ export class BiliWatchWorld implements World {
       parentText = item.text;
       parentWriter = item.author;
       focusOwnerId = item.focusOwnerId;
+      recipientId = item.authorId || undefined;
     } else {
       target = normalizeTargetArg(args.target);
       const cached = this.store.comment(target);
@@ -1905,6 +1911,7 @@ export class BiliWatchWorld implements World {
         ? { parent: { id: target.parent, authorId: '', author: parentWriter, text: parentText, target, replies: [] } }
         : {}),
       ...(focusOwnerId ? { focusOwnerId } : {}),
+      ...(recipientId ? { recipientId } : {}),
     };
     this.store.saveBrief(brief as any);
 
@@ -2023,6 +2030,23 @@ export class BiliWatchWorld implements World {
 
       const target = normalizeTargetArg(args.target);
       if (target.parent !== '0') throw new Error('推荐只能在视频下新发一条评论，不能接楼。');
+
+      // 同一条视频只推一次。四层防重拦不住这个：requestId 从 briefId 派生，
+      // 每次 prepare 都是新的，等于每次都算"新操作"。实测 11-06 06:35 和
+      // 11-08 00:23 把《免费live2D模型》推了两次，主人连着收了两条 @。
+      const prior = this.service.recommendAlreadySent(acc.id, target.oid);
+      if (prior) {
+        const at = new Date(prior.createdAt).toLocaleString('zh-CN', {
+          timeZone: this.ctx.timezone,
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        throw new Error(
+          `这条视频 ${at} 已经推荐给主人了，不重复推。换一条，或者干脆不推。`,
+        );
+      }
       const draft = String(args.draft ?? '').trim().slice(0, 1000);
       if (!draft) throw new Error('action=prepare 需要 draft（打算说什么）。');
       // @ 由配置自动加，正文里不该自己写一遍 —— 免得像上轮那样 prepare 两次
@@ -3009,12 +3033,6 @@ function clean(v: unknown, max = 8000): string {
 const isBili = (v: string): boolean =>
   /bilibili\.com/i.test(v) || /^(BV[0-9A-Za-z]{10}|av\d{1,20})$/i.test(v.trim());
 
-/**
- * 把一个视频标识拆成 { bvid } 或 { aid }。
- *
- * 雅汐习惯直接给 BV 号，但链接、av 号、裸 aid 也都该认 —— 认不出来就返回 null，
- * 由调用方按"原样字符串"再比对一次。
- */
 function normalizeTargetArg(value: unknown): CommentTarget {
   // 复用 core 的校验（root/parent 必须同时为 0 或同时非 0）
   return require0(value);
