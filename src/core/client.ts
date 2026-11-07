@@ -296,6 +296,11 @@ export class BiliClient {
    *
    * B 站会给新会话分配设备标识；**不能自己编** —— 伪造的 buvid 会被风控识别，
    * 表现是"某些接口莫名返回 -352"。所以缺就向 `/x/frontend/finger/spi` 要。
+   *
+   * 这个字段是「锦上添花」，不是发送的前提。拿不到就照常发 —— 真有问题
+   * POST 那一步会给出明确错误码，比在这里把评论拦死有用得多。
+   * （0.2.5 就是因为下面那条正则把 `buvid4` 里的 `+` `=` 判成非法，
+   * 扫码登录后的账号所有评论都发不出去。）
    */
   async prepareSession(signal?: AbortSignal): Promise<void> {
     const source = this.o.cookie();
@@ -310,17 +315,23 @@ export class BiliClient {
 
     if (parts.get('buvid3') && parts.get('buvid4')) return;
 
-    const d = await this.api('/x/frontend/finger/spi', {}, signal);
+    let d: Record<string, unknown> = {};
+    try {
+      d = await this.api('/x/frontend/finger/spi', {}, signal);
+    } catch {
+      signal?.throwIfAborted();
+      return; // 要不到就先不带 buvid 发，别在这里拦死
+    }
+
     for (const [cookieKey, field] of [
       ['buvid3', 'b_3'],
       ['buvid4', 'b_4'],
     ] as const) {
       if (parts.get(cookieKey)) continue;
       const id = String(d[field] ?? '');
-      // 只接受 B 站给的合法形态；形状不对就宁可不要
-      if (!/^[A-Za-z0-9_-]{8,200}$/.test(id)) {
-        throw new BiliError('发送前的网页会话初始化未完成，尚未提交；请稍后重试或重新扫码。', 'rejected');
-      }
+      // 只挡「会破坏 cookie 拼接」的字符（`;`、空白、引号、控制符）。
+      // 值本身允许 base64：buvid4 实测就是 `...-L+vm2UgL2gLgfi0jMRiupw==` 这种形态。
+      if (!/^[\w+/=.-]{8,400}$/.test(id) || /\s/.test(id)) continue;
       parts.set(cookieKey, id);
     }
 
