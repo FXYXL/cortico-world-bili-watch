@@ -57,6 +57,7 @@ import { resolveAsrConfig } from './read/asr.ts';
 import { applyEngineEnv, loadEngine, type Engine } from './engine/load.js';
 import { ensureDirs, worldDirs } from './paths.ts';
 import { buildTimeline } from './webui/data.ts';
+import { videoHistory } from './social/videoHistory.ts';
 
 const ENV_PROMPT_PATH = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
 
@@ -2235,10 +2236,19 @@ export class BiliWatchWorld implements World {
             note:
               '最近在前的轮次在前。summary 是你当时写给主人看的心得，said 是你在这些视频下' +
               '发过的评论（kind: reply=回别人 / proactive=主动 / recommend=推荐给主人）。' +
-              '别在这些视频下重复发过的话。',
+              '别在这些视频下重复发过的话。想按单个视频查（看过没/发过几条/写过没）用 action=video。',
           }),
         };
       }
+      case 'video':
+        // 按视频索引，一条视频一行（逻辑在 social/videoHistory.ts，独立可测）。
+        return {
+          text: JSON.stringify(videoHistory(this.store, {
+            video: args.video,
+            limit: args.limit,
+            timezone: this.ctx.timezone,
+          })),
+        };
       default:
         throw new Error(`未知 action: ${action}`);
     }
@@ -2999,6 +3009,12 @@ function clean(v: unknown, max = 8000): string {
 const isBili = (v: string): boolean =>
   /bilibili\.com/i.test(v) || /^(BV[0-9A-Za-z]{10}|av\d{1,20})$/i.test(v.trim());
 
+/**
+ * 把一个视频标识拆成 { bvid } 或 { aid }。
+ *
+ * 雅汐习惯直接给 BV 号，但链接、av 号、裸 aid 也都该认 —— 认不出来就返回 null，
+ * 由调用方按"原样字符串"再比对一次。
+ */
 function normalizeTargetArg(value: unknown): CommentTarget {
   // 复用 core 的校验（root/parent 必须同时为 0 或同时非 0）
   return require0(value);
