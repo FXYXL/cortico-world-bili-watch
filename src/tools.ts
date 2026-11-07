@@ -424,7 +424,9 @@ const socialTools = [
       'Publish a PUBLIC comment. Preparation binds platform, account, target and draft; never reuse',
       'a brief across destinations. A changed draft returns a renewed needs_review brief without sending.',
       '',
-      'For a notification supply `inboxId`; otherwise supply a full target and a **stable requestId**.',
+      'For a notification supply `inboxId`. For a prepared reply just pass `briefId` — the target',
+      'and a stable requestId are derived from the brief, so do **not** re-supply them.',
+      'Only a bare new comment (no preparation) needs a full `target` plus a **stable requestId**.',
       'Reuse the same requestId when checking a retry. An unknown result is pending confirmation,',
       'not a definite failure - do not bypass it by changing text or requestId at the same target.',
       '',
@@ -446,7 +448,8 @@ const socialTools = [
         requestId: {
           type: 'string',
           maxLength: 180,
-          description: 'Stable idempotency key for a new top-level comment or an unsolicited thread reply.',
+          description:
+            'Stable idempotency key for a new top-level comment or an unsolicited thread reply. Omit it when `briefId` is given (derived from the brief).',
         },
         text: { type: 'string', minLength: 1, maxLength: 1000 },
         mentionFocus: {

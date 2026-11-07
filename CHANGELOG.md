@@ -3,6 +3,35 @@
 桌宠的市场按本文件的 `## <版本号>` 分段显示更新说明，
 标题里的版本号必须和 `package.json` 的 `version` 一致。
 
+## 0.2.7
+
+修「bili_publish 明明传了 target、oid、root、parent、type=1，还是报『评论类型仅支持
+视频(1)、动态(11/17)』；补上 retryRejected 又变成『新评论必须提供固定 requestId』；
+最后自己编了个 requestId 才发出去」。
+
+**根因：publish 不会从凭据里取目标。** `bili_prepare` 返回的 brief 里明明存着
+target，但 publish 是先 `normalizeTarget(input.target)`、后读 brief —— 于是
+「只传 briefId」必然被判成缺 target；补上 target 又卡在 requestId 上；模型只好
+自己编一个（这次编的是 `reply-323189507152-20261107`），四层防重直接失效。
+
+连带发现（鱼自己也看出来了：「带 briefId 的回复被当成新评论处理」）：kind 判定
+只看 `inboxId`，凭据接楼（`parent≠0`）一律记成 `proactive`。今早 13:51 那条回复
+就是这么落库的 —— 扣的是「主动发言」额度、单人每日上限没生效、记录页还显示成
+主动评论。
+
+- **target 来源**：`input.target ?? brief.target`；两个都没有时给明确提示
+  「缺少发送目标：给 briefId 或完整 target」，而不是误导性的类型错误。
+- **requestId 自动派生**：有 briefId 就用 `brief:<briefId>`，同一个凭据重试必然
+  复用同一键；显式传 target + requestId 的旧用法原样保留。
+- **kind 按目标判定**：接楼（`parent≠0`）记 `reply`，新评论记 `proactive`，
+  推荐仍记 `recommend`。
+- 工具描述同步：有 briefId 就不必再传 target / requestId。
+
+离线验证 5/5（真实 state 副本 + 假网络，不真的发出去，脚本在 `test/publish-brief.mts`）：
+① 只给 briefId 的接楼 → `kind=reply`、`req=brief:71f211fc…`、真正 POST 到 reply/add；
+② 只给 briefId 的新评论 → `kind=proactive`；③ 什么都不给 → 「缺少发送目标」；
+④ 显式 target + requestId 的旧用法仍然 `sent`；⑤ 同一 brief 重发 → `reused`、零重复提交。
+
 ## 0.2.6
 
 修「评论永远发不出去：发送前的网页会话初始化未完成，第五次了」（鱼的今早反馈，

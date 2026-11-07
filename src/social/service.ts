@@ -656,6 +656,19 @@ export class BiliService {
 
     const acc = this.account ?? (await this.connect(signal));
 
+    // ── 凭据（briefId）：先读，它本身就是 target 与 requestId 的来源 ────
+    //
+    // 模型只需要 `bili_prepare` → `bili_publish({ briefId, text })`。凭据里已经
+    // 绑定了平台/账号/目标，还要它自己再抄一遍 target，只会抄错 —— 实测：
+    // 漏传 target 被报「评论类型仅支持视频(1)」，补上 target 又要自己编
+    // requestId，编出来的还是新键（防重直接失效）。
+    const brief = input.preparation?.briefId
+      ? this.d.store.brief(input.preparation.briefId)
+      : undefined;
+    if (input.preparation?.briefId && !brief) {
+      throw new BiliError('找不到这份接话凭据（可能已过期），请重新 bili_prepare。', 'rejected');
+    }
+
     // ── 定位目标与账本 ───────────────────────────────────────────────
     let target: CommentTarget;
     let kind: SendRecord['kind'] = input.recommend ? 'recommend' : 'proactive';
@@ -671,7 +684,18 @@ export class BiliService {
       kind = inboxItem.focusOwnerId ? 'focus' : 'reply';
       recipientId = inboxItem.authorId || undefined;
     } else {
-      target = normalizeTarget(input.target);
+      const raw = input.target ?? brief?.target;
+      if (!raw) {
+        throw new BiliError(
+          '缺少发送目标：给 briefId（bili_prepare 拿到的）或完整 target（oid/type/root/parent）。',
+          'invalid',
+        );
+      }
+      target = normalizeTarget(raw);
+      // 接楼就是回复，用回复账本（每人每日上限才算得对）。
+      // 以前只有 inboxId 才记 reply，凭据接楼一律记成 proactive —— 主动发言
+      // 额度被扣、单人上限没生效、记录页还显示成"主动评论"。
+      if (!input.recommend) kind = target.parent !== '0' ? 'reply' : 'proactive';
     }
 
     // 接楼必须有 recipientId：拿不到就不发，绝不绕过单人上限
@@ -684,7 +708,11 @@ export class BiliService {
       }
     }
 
-    const requestId = input.inboxId ? `reply:${input.inboxId}` : input.requestId;
+    // 凭据本身就是幂等键：同一个 brief 重试沿用同一个 requestId，
+    // 模型不用编、也不该编（编新的会让四层防重失效）。
+    const requestId = input.inboxId
+      ? `reply:${input.inboxId}`
+      : (input.requestId ?? (brief ? `brief:${brief.id}` : undefined));
     if (!requestId || (!input.inboxId && requestId.length > 180) || /[\r\n]/.test(requestId)) {
       throw new BiliError('新评论必须提供固定的 requestId；重试要沿用原值。', 'invalid');
     }
@@ -729,13 +757,7 @@ export class BiliService {
       };
     }
 
-    // ── 凭据（briefId）：目标/账号/草稿必须对得上 ─────────────────────
-    const brief = input.preparation?.briefId
-      ? this.d.store.brief(input.preparation.briefId)
-      : undefined;
-    if (input.preparation?.briefId && !brief) {
-      throw new BiliError('找不到这份接话凭据（可能已过期），请重新 bili_prepare。', 'rejected');
-    }
+    // ── 凭据绑定的账号/目标/草稿必须对得上 ───────────────────────────
     if (brief) {
       if (brief.accountId !== acc.id) {
         throw new BiliError('凭据属于另一个账号，未提交。', 'rejected');
