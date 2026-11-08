@@ -143,6 +143,8 @@ export interface SendRecord {
   accountId: string;
   /** 回给谁（同一个人每日配额按这个算）。 */
   recipientId?: string;
+  /** 发出去的文案相对凭据里的草稿做过润色（内容判断已按新文案重跑）。 */
+  revised?: boolean;
   target: CommentTarget;
   text: string;
   status: SendStatus;

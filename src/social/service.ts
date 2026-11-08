@@ -103,6 +103,38 @@ export interface ServiceDeps {
   };
 }
 
+/**
+ * 两个文本的相似度（0–1）：按字符的最长公共子序列 / 较长那条的长度。
+ *
+ * 为什么不用 bigram 重合度：中文短句里换个短语会把连续好几个 bigram 一起毁掉，
+ * 实测「补一句」→「补一个实际做法」只有 69%，被误判成"换了话题"。
+ * LCS 对这种局部替换是线性的，同样改法能到 78%，更贴近人的直觉。
+ *
+ * 用来区分「润色」和「换了一段话」：她实测会因为改一个词被拒
+ * 「文案与凭据不一致」，只能重跑整轮 prepare —— 那不是防篡改，是在罚她改错字。
+ */
+function draftSimilarity(a: string, b: string): number {
+  const A = [...String(a).replace(/\s+/g, '')];
+  const B = [...String(b).replace(/\s+/g, '')];
+  if (!A.length || !B.length) return A.length === B.length ? 1 : 0;
+  const m = B.length;
+  let prev = new Uint16Array(m + 1);
+  let cur = new Uint16Array(m + 1);
+  for (let i = 1; i <= A.length; i++) {
+    for (let j = 1; j <= m; j++) {
+      cur[j] = A[i - 1] === B[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+    }
+    const swap = prev;
+    prev = cur;
+    cur = swap;
+    cur.fill(0);
+  }
+  return prev[m] / Math.max(A.length, B.length);
+}
+
+/** 润色和篡改的分界：重合度低于这个值就当"换了话题"，要求重新 prepare。 */
+const DRAFT_SIMILARITY_MIN = 0.7;
+
 export class BiliService {
   private account: { id: string; name: string } | null = null;
   private lastPollAt: string | null = null;
@@ -690,6 +722,10 @@ export class BiliService {
     if (input.preparation?.briefId && !brief) {
       throw new BiliError('找不到这份接话凭据（可能已过期），请重新 bili_prepare。', 'rejected');
     }
+    /** 文案相对草稿的重合度；1 = 一字未改。 */
+    let draftSim = 1;
+    /** 有值说明这次是润色过的，记下来方便复盘。 */
+    let revisedFrom: string | undefined;
 
     // ── 定位目标与账本 ───────────────────────────────────────────────
     let target: CommentTarget;
@@ -817,12 +853,20 @@ export class BiliService {
       if (JSON.stringify(brief.target) !== JSON.stringify(target)) {
         throw new BiliError('凭据绑定的目标与本次发送不一致，未提交；请重新 prepare。', 'rejected');
       }
-      // 草稿非空时要求一字不差：改了文案就该重新 prepare（重新读上下文与建议）
+      // 草稿不一致：**润色放行、换话题要求重来**。
+      // 以前要求一字不差，结果她改「补一句 → 补一个实际做法」都被拒，
+      // 只能重跑整轮 prepare（重读评论区、重算判断）—— 防篡改不该用字符串相等。
+      // 真正的把关是下面用**新文案**重跑参与判断。
       if (brief.draft && brief.draft !== text) {
-        throw new BiliError(
-          '文案与凭据里的草稿不一致。把新文案作为 draft 重新 bili_prepare，再 publish；不要用旧凭据发新话。',
-          'rejected',
-        );
+        draftSim = draftSimilarity(brief.draft, text);
+        if (draftSim < DRAFT_SIMILARITY_MIN) {
+          throw new BiliError(
+            `文案与凭据里的草稿差太多（重合度 ${Math.round(draftSim * 100)}%），` +
+              '像是换了一段话。把新文案作为 draft 重新 bili_prepare 再来。',
+            'rejected',
+          );
+        }
+        revisedFrom = brief.draft;
       }
     }
 
@@ -868,7 +912,7 @@ export class BiliService {
         !brief ||
         brief.accountId !== acc.id ||
         JSON.stringify(brief.target) !== JSON.stringify(target) ||
-        (brief.draft && brief.draft !== text) ||
+        (brief.draft && brief.draft !== text && draftSim < DRAFT_SIMILARITY_MIN) ||
         JSON.stringify(brief.mention) !== JSON.stringify(mention) ||
         Date.now() - Date.parse(brief.createdAt) > 3 * 3600_000
       ) {
@@ -918,12 +962,15 @@ export class BiliService {
     }
     const videoTitle =
       this.d.store.video(target.oid)?.title ?? brief?.videoTitle ?? '';
+    // 润色过的文案不能用旧草稿的判断：那份是拿旧字算的，改了字就得重新判。
     const participation = judgeParticipation(
       videoTitle,
       text,
-      (input.preparation?.judgment ?? brief?.judgment) as
-        | { mode?: string; evidence?: string }
-        | undefined,
+      revisedFrom
+        ? undefined
+        : ((input.preparation?.judgment ?? brief?.judgment) as
+            | { mode?: string; evidence?: string }
+            | undefined),
     );
     if (participation.needsRevision || participation.mode !== 'discuss') {
       throw new PublicReplySkipped(participation.reason);
@@ -973,6 +1020,7 @@ export class BiliService {
       ...(mention ? { mention } : {}),
       ...(inboxItem?.focusOwnerId ? { focusOwnerId: inboxItem.focusOwnerId } : {}),
       ...(inboxItem && this.isAutoReply(inboxItem) ? { ownerAutoReply: true } : {}),
+      ...(revisedFrom ? { revised: true } : {}),
       ...(brief
         ? {
             preparation: {
@@ -1000,6 +1048,7 @@ export class BiliService {
       ...(record.mention ? { mention: record.mention } : {}),
       ...(record.focusOwnerId ? { focusOwnerId: record.focusOwnerId } : {}),
       ...(record.ownerAutoReply ? { ownerAutoReply: record.ownerAutoReply } : {}),
+      ...(record.revised ? { revised: true } : {}),
       ...(record.preparation ? { preparation: record.preparation } : {}),
     });
 
