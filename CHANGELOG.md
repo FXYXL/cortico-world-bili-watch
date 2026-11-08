@@ -3,6 +3,29 @@
 桌宠的市场按本文件的 `## <版本号>` 分段显示更新说明，
 标题里的版本号必须和 `package.json` 的 `version` 一致。
 
+## 0.2.10
+
+回复通知发完**自动标「已回复」**，不用再手动清待办。
+
+她实测反馈：发完得自己点一下「已回复」，容易忘。根因和 0.2.9 那个是同一个 ——
+她一直是 `bili_prepare({ inboxId })` → `bili_publish({ briefId, text })`，
+publish 不传 `inboxId` 就不知道自己来自哪条通知，`if (inboxItem) handleInbox(...)`
+那行代码永远走不到。
+
+比"要手动点"更麻烦的是它开的口子：**待办一直挂着 → 她再 prepare 一次就是新
+briefId、新 requestId → 同一条通知会被回第二遍**。
+
+- 凭据记住来源通知（`sourceInboxId`），publish 只带 briefId 也能认出"在回哪条"
+- 发完自动 `handleInbox(..., 'replied')`：待办立刻消失，且不再混记成「跳过」
+- 防重键改成 `reply:<通知id>`：**同一条通知无论 prepare 几次，都只可能发一次**
+- 「看过不回」的口子保留：`bili_inbox({ action: "handled", reason })`
+- 顺带修 `recipientId` 被覆盖：通知里已有 authorId 时，不再回头去读楼中楼
+  （0.2.9 那处修得不彻底，只带 briefId 且凭据里没作者时仍会卡）
+
+离线验证（真机 state 副本）：发完自动 `handled`（`kind: replied`）、
+requestId 按通知 id 派生、重新 prepare 再发 `reused=true` 不重复提交；
+真机 13:19 那条回复后待办也确实自动空了。
+
 ## 0.2.9
 
 两个真 bug，都是她实测撞出来的。

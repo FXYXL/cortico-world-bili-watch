@@ -1830,6 +1830,7 @@ export class BiliWatchWorld implements World {
     // 回头去读楼中楼找父评论作者 —— 而父评论经常排在最后一页，第一页读不到，
     // 于是发不出去（实测：缘梦幻境那条报「暂未取得对方平台账号身份」）。
     let recipientId: string | undefined;
+    const sourceInboxId = args.inboxId ? String(args.inboxId) : undefined;
     if (args.inboxId) {
       const item = this.store.getInbox(String(args.inboxId));
       if (!item) throw new Error('收件箱消息不存在');
@@ -1912,6 +1913,7 @@ export class BiliWatchWorld implements World {
         : {}),
       ...(focusOwnerId ? { focusOwnerId } : {}),
       ...(recipientId ? { recipientId } : {}),
+      ...(sourceInboxId ? { sourceInboxId } : {}),
     };
     this.store.saveBrief(brief as any);
 

@@ -105,7 +105,7 @@ export interface InboxItem {
   /** 主人评论区自动回应：单独计账，不占普通额度。 */
   ownerAutoReply?: boolean;
   /** 被本机规则直接收尾时的原因（`skip` / `limit` 等），面板会显示。 */
-  handling?: { kind: 'unsafe' | 'resource' | 'limit' | 'skip'; reason: string };
+  handling?: { kind: 'unsafe' | 'resource' | 'limit' | 'skip' | 'replied'; reason: string };
 }
 
 /** 一次发送的结局。**这五个状态不能混** —— 弄混就是重发或漏发。 */
@@ -231,6 +231,11 @@ export interface ConversationBrief {
   draft: string;
   /** prepare 时明确要 @ 谁（`mentionFocus`）。publish 只认这一份。 */
   mention?: FocusMention;
+  /**
+   * 这份凭据是从哪条通知来的。publish 只带 briefId 时靠它认出"我是在回通知"，
+   * 才能自动标已回复、并按 `reply:<通知id>` 派生防重键。
+   */
+  sourceInboxId?: string;
   /**
    * 该回给谁（平台账号 id）。来自收件箱的 authorId —— 收到通知那一刻就确定了。
    * 存进凭据是因为 publish 常常只带 briefId：那时回头读楼中楼找父评论作者

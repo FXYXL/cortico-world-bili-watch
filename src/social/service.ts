@@ -543,13 +543,13 @@ export class BiliService {
   }
 
   /** 明确决定不接话。**这是收尾，不是失败** —— 理由要留下来。 */
-  handleInbox(id: string, reason?: string): InboxItem | null {
+  handleInbox(id: string, reason?: string, kind: 'skip' | 'replied' = 'skip'): InboxItem | null {
     const item = this.d.store.getInbox(id);
     if (!item) throw new Error('收件箱消息不存在');
     this.d.store.updateInbox(id, {
       status: 'handled',
       ...(reason?.trim()
-        ? { handling: { kind: 'skip' as const, reason: reason.trim().slice(0, 500) } }
+        ? { handling: { kind, reason: reason.trim().slice(0, 500) } }
         : {}),
     });
     return { ...item, status: 'handled' };
@@ -696,15 +696,36 @@ export class BiliService {
     let kind: SendRecord['kind'] = input.recommend ? 'recommend' : 'proactive';
     let recipientId: string | undefined;
     let inboxItem: InboxItem | undefined;
+
+    /**
+     * 来源通知：显式 `inboxId`，或者凭据里记着的那个。
+     *
+     * **凭据也必须算**：prepare 明明是从收件箱来的，publish 只带 briefId 时
+     * 以前完全不知道自己来自哪条通知 —— 后果有两个，都是实测撞出来的：
+     *   1. 发完不自动标「已回复」，待办一直挂着；她再 prepare 一次就是新
+     *      briefId、新 requestId，**同一条通知会被回第二遍**；
+     *   2. 只能回头读楼中楼找父评论作者，而父评论在最后一页，常常读不到。
+     */
+    const inboxId = input.inboxId
+      ? String(input.inboxId)
+      : (brief?.sourceInboxId ?? undefined);
+
     if (input.inboxId) {
       inboxItem = this.d.store.getInbox(input.inboxId) ?? undefined;
       if (!inboxItem) throw new Error('收件箱消息不存在');
       if (inboxItem.accountId !== acc.id) {
         throw new Error('该消息属于其他账号，不能用当前账号回复。');
       }
+    } else if (inboxId) {
+      // 凭据带来的通知：找不到就忽略（收件箱可能已经清理过），不影响发送
+      const found = this.d.store.getInbox(inboxId);
+      if (found && found.accountId === acc.id) inboxItem = found;
+    }
+
+    if (inboxItem) {
       target = normalizeTarget(inboxItem.target);
       kind = inboxItem.focusOwnerId ? 'focus' : 'reply';
-      recipientId = inboxItem.authorId || undefined;
+      recipientId = inboxItem.authorId || brief?.recipientId;
     } else {
       const raw = input.target ?? brief?.target;
       if (!raw) {
@@ -720,8 +741,10 @@ export class BiliService {
       if (!input.recommend) kind = target.parent !== '0' ? 'reply' : 'proactive';
     }
 
-    // 接楼必须有 recipientId：拿不到就不发，绝不绕过单人上限
-    if (!input.inboxId && target.parent !== '0') {
+    // 接楼必须有 recipientId：拿不到就不发，绝不绕过单人上限。
+    // 通知里已经有 authorId 的就别再找了 —— 以前这里写的是 `!input.inboxId`，
+    // 只带 briefId 时会绕过上面的赋值、又去读楼中楼，反而把能发的楼卡死。
+    if (!recipientId && target.parent !== '0') {
       // 凭据里记着"回给谁"就先信它（来自收件箱的 authorId，收到通知那刻就确定了）。
       // 只拿 briefId 来发时，这里会回头读楼中楼找父评论作者 —— 而父评论通常是
       // **最新的那条，排在最后一页**，第一页永远读不到，于是明明能回的楼被卡成
@@ -736,8 +759,11 @@ export class BiliService {
 
     // 凭据本身就是幂等键：同一个 brief 重试沿用同一个 requestId，
     // 模型不用编、也不该编（编新的会让四层防重失效）。
-    const requestId = input.inboxId
-      ? `reply:${input.inboxId}`
+    // 通知回复的键 = 通知 id：同一条通知无论如何 prepare 几次，都只可能发一次。
+    // （以前只有显式 inboxId 才这样，走凭据时退化成 brief:<briefId> —— 每 prepare
+    // 一次就是新键，等于给"重复回同一条"开了口子。）
+    const requestId = inboxId
+      ? `reply:${inboxId}`
       : (input.requestId ?? (brief ? `brief:${brief.id}` : undefined));
     if (!requestId || (!input.inboxId && requestId.length > 180) || /[\r\n]/.test(requestId)) {
       throw new BiliError('新评论必须提供固定的 requestId；重试要沿用原值。', 'invalid');
@@ -942,7 +968,7 @@ export class BiliService {
       createdAt: new Date().toISOString(),
       kind,
       ...(recipientId ? { recipientId } : {}),
-      ...(input.inboxId ? { inboxId: input.inboxId } : {}),
+      ...(inboxId ? { inboxId } : {}),
       ...(input.roamId ? { roamId: input.roamId } : {}),
       ...(mention ? { mention } : {}),
       ...(inboxItem?.focusOwnerId ? { focusOwnerId: inboxItem.focusOwnerId } : {}),
@@ -1025,7 +1051,7 @@ export class BiliService {
         ...(receipt.platformState !== undefined ? { platformState: receipt.platformState } : {}),
       });
 
-      if (inboxItem) this.handleInbox(inboxItem.id, '已回复');
+      if (inboxItem) this.handleInbox(inboxItem.id, '已回复', 'replied');
 
       return { ...done, submittedThisCall: true, delivery: describeDelivery(done) };
     } catch (error) {
