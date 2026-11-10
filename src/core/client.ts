@@ -78,6 +78,56 @@ export function numericId(value: unknown, allowZero = false): string {
   return s;
 }
 
+/* BV 号 ↔ aid：纯本地换算，不联网。
+ * 表里没有 I/l/O/0 这些易混字符，所以能反查出唯一位置。 */
+const BV_XOR = 23442827791579n;
+const BV_MASK = 2251799813685247n;
+const BV_BASE = 58n;
+const BV_TABLE = 'FcwAPNKTMug3GV5Lj7EJnHpWsx4tb8haYeviqBz6rkCy12mUSDQX9RdoZf';
+
+/** 把 BV 号换成数字 aid。格式不对返回 undefined。 */
+export function bv2av(bvid: string): string | undefined {
+  if (!/^BV[0-9A-Za-z]{10}$/.test(bvid)) return undefined;
+  const c = [...bvid];
+  [c[3], c[9]] = [c[9], c[3]];
+  [c[4], c[7]] = [c[7], c[4]];
+  c.splice(0, 3);
+  let tmp = 0n;
+  for (const ch of c) {
+    const idx = BV_TABLE.indexOf(ch);
+    if (idx < 0) return undefined;
+    tmp = tmp * BV_BASE + BigInt(idx);
+  }
+  return String((tmp & BV_MASK) ^ BV_XOR);
+}
+
+/**
+ * 把用户/模型给的视频标识统一成数字 aid。
+ *
+ * 她实测会顺手写 BV 号（那是她日常看的标识），而工具原来只收 aid，
+ * 填错一位就会「凭据绑到别的视频上」。所以三种写法都认：
+ * 数字 aid / BV 号 / 视频链接或 av 号。
+ */
+export function videoOid(input: unknown): string {
+  const s = String(input ?? '').trim();
+  if (/^\d{1,24}$/.test(s)) {
+    // oid=0 原来是被 numericId 拒掉的，别因为换了个函数就漏过去
+    if (BigInt(s) === 0n) throw new BiliError('平台 ID 无效。', 'invalid');
+    return s;
+  }
+  const bv = s.match(/BV[0-9A-Za-z]{10}/);
+  if (bv) {
+    const aid = bv2av(bv[0]);
+    if (aid) return aid;
+    throw new BiliError('BV 号无效（字符对不上）。', 'invalid');
+  }
+  const av = s.match(/(?:^|[^0-9a-zA-Z])av(\d{1,24})/i);
+  if (av) return av[1];
+  const q = s.match(/[?&](?:aid|oid)=(\d{1,24})/);
+  if (q) return q[1];
+  throw new BiliError('视频标识无效：要数字 aid、BV 号或视频链接。', 'invalid');
+}
+
 /**
  * 评论区目标校验。
  *
@@ -90,9 +140,11 @@ export function normalizeTarget(value: unknown): CommentTarget {
   if (!t || ![1, 11, 17].includes(Number(t.type))) {
     throw new BiliError('评论类型仅支持视频(1)、动态(11/17)。', 'invalid');
   }
+  const type = Number(t.type) as 1 | 11 | 17;
   const target: CommentTarget = {
-    oid: numericId(t.oid),
-    type: Number(t.type) as 1 | 11 | 17,
+    // 视频认 BV/av/链接；动态的 id 就只能是数字
+    oid: type === 1 ? videoOid(t.oid) : numericId(t.oid),
+    type,
     root: numericId(t.root ?? '0', true),
     parent: numericId(t.parent ?? '0', true),
   };

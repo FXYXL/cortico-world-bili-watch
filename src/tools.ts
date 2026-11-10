@@ -40,7 +40,8 @@ const target = {
   properties: {
     oid: {
       type: 'string',
-      description: 'Exact Bilibili aid (numeric, not BV id), or dynamic id. Reuse the value readComments returned.',
+      description:
+        'Video: aid, **BV id** (BV1xxxxxxxxx) or a video link — all accepted. Dynamic: its numeric id. Reuse the value readComments returned when one was given.',
     },
     type: { type: 'integer', enum: [1, 11, 17] },
     root: { type: 'string', description: 'Root comment id, or 0 for a new top-level comment.' },
@@ -360,9 +361,9 @@ const socialTools = [
       'as `cursor` for the next page (page numbers do not work for top-level replies - they skip',
       'and repeat). A root thread (root != 0) is paginated with `page` instead.',
       '',
-      '**`target.oid` must be the numeric aid.** Get it from `bili_video` first — do not pass an',
-      'empty oid, a BV number, or a guessed id (that call is rejected). `root`/`parent` are',
-      'strings; use "0" for a new top-level comment.',
+      '**`target.oid`** accepts the numeric aid, a **BV id** or a video link for videos (they are',
+      'converted locally); for dynamics it must be the numeric id. Do not pass an empty oid or a',
+      'guessed one. `root`/`parent` are strings; use "0" for a new top-level comment.',
       '',
       '**Reuse the returned `target` identifiers to reply to the right person**, even without an @',
       'notification. A child target keeps the original root and uses its own id as parent.',

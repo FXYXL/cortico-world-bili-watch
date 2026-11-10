@@ -153,6 +153,46 @@ export async function getVideo(
   };
 }
 
+export interface VideoOidProbe {
+  /** false 只代表"这条视频不存在或不可发"，不代表网络出问题 */
+  ok: boolean;
+  title?: string;
+  author?: string;
+  /** 硬失败原因（视频不存在/不可见），可以据此拒绝 */
+  reason?: string;
+  /** 软失败（网络/风控）：拿不准就放行，只提示别拦死 */
+  unverified?: string;
+}
+
+/**
+ * 这个 oid 到底是不是一条能发评论的视频。
+ *
+ * 她实测填错过一次 oid：「那个 oid 根本解析不出视频，它也照样给凭据」。
+ * 但**不能拿"查不到"当"错"** —— 网络抖一下、被风控 -352，都会查不到。
+ * 所以只有明确的「不存在/不可见」才算错，其余一律放行 + 提示。
+ */
+export async function probeVideoOid(
+  client: BiliClient,
+  oid: string,
+  signal?: AbortSignal,
+): Promise<VideoOidProbe> {
+  try {
+    const d = await client.api('/x/web-interface/view', { aid: oid }, signal);
+    return {
+      ok: true,
+      title: String(d.title ?? '').slice(0, 200),
+      author: String(d.owner?.name ?? '').slice(0, 80),
+    };
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? '');
+    // -404 不存在；62002 不可见；62004 审核中；62012 仅UP可见
+    if (/-404|62002|62004|62012/.test(msg)) {
+      return { ok: false, reason: msg.slice(0, 120) };
+    }
+    return { ok: true, unverified: msg.slice(0, 120) };
+  }
+}
+
 /**
  * 播放地址。
  *
