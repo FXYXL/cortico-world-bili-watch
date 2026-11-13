@@ -4,7 +4,7 @@
  * 用真实 state.json 的副本 + 假网络，跑四种入参形态，看落库的 target/kind/requestId。
  * 每次运行都从真机 state 重新复制，不碰真实数据、不真的发出去。
  */
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { BiliService } from '../src/social/service.ts';
 import { SocialStore } from '../src/social/store.ts';
 import { BiliClient } from '../src/core/client.ts';
@@ -12,7 +12,9 @@ import { BiliClient } from '../src/core/client.ts';
 const SRC = 'D:/Coopanion/data/home/companion/data/worlds/bili-watch/state/state.json';
 const DIR = 'D:/AI/.tmp-bili-test';
 const ACCOUNT = '3747576750804208';
-const BRIEF = '71f211fc-c29c-4b1b-93ab-148f33255001';
+// 不写死 brief id：真实 state 的 briefs 只留最近 50 条，几天就滚出去了。
+// 自己造一份，target 借用真实 inbox 的接楼目标。
+const BRIEF = 'test-brief-reply';
 const DRAFT = '同感。我夸完会回头想一句：这是真觉得好，还是只想让对方高兴。多数时候两样都在，分不开。';
 
 mkdirSync(DIR, { recursive: true });
@@ -100,6 +102,24 @@ const svc = new BiliService({
 });
 
 await svc.connect();
+
+// 造一份"回某楼"的凭据（parent≠0 + recipientId），给 ① 用
+{
+  const st0 = JSON.parse(readFileSync(`${DIR}/state.json`, 'utf8'));
+  const reply = st0.inbox.filter((i: any) => i.target.parent !== '0').at(-1);
+  if (!reply) throw new Error('state 里找不到接楼通知，换个数据再试');
+  store.saveBrief({
+    id: BRIEF,
+    accountId: ACCOUNT,
+    target: reply.target,
+    createdAt: new Date().toISOString(),
+    purpose: '回通知',
+    draft: DRAFT,
+    nearby: [], recentOwn: [], advice: [], guidance: [],
+    judgment: { mode: 'discuss' } as any,
+    ...(reply.authorId ? { recipientId: reply.authorId } : {}),
+  } as any);
+}
 
 function report(label: string, lenBefore: number, extra = '') {
   const fresh = store.outbox().length > lenBefore ? (store.outbox().at(-1) as any) : null;

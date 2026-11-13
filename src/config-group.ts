@@ -183,6 +183,35 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
         maximum: 3600,
         'x-hot': true,
       },
+      'worlds.bili-watch.sleep.enabled': {
+        type: 'boolean',
+        title: '睡眠时间（这段时间别打扰她）',
+        description:
+          '开了以后，这段时间里**不推闲逛机会、不推评论回复提醒**。' +
+          '私信要不要通见下一项。默认关 —— 不擅自改她的作息。',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.sleep.start': {
+        type: 'string',
+        title: '几点睡',
+        pattern: '^([01]?\\d|2[0-3]):[0-5]\\d$',
+        description: '24 小时制，例如 `23:30`。**可以比"几点醒"晚**（表示跨午夜）。',
+      },
+      'worlds.bili-watch.sleep.end': {
+        type: 'string',
+        title: '几点醒',
+        pattern: '^([01]?\\d|2[0-3]):[0-5]\\d$',
+        description:
+          '例如 `08:00`。醒来后积压的通知不会被一次性灌进来：' +
+          '超过 6 条时只补最近 2 条，更早的标成「睡过去了」。',
+      },
+      'worlds.bili-watch.sleep.allowDm': {
+        type: 'boolean',
+        title: '睡眠期间私信照常',
+        description:
+          '私信是有人专门找她说话，和"评论被人回复"不是一回事，所以默认可通。' +
+          '关掉就是彻底静音（连私信也不推）。',
+      },
       'worlds.bili-watch.posting.enabled': {
         type: 'boolean',
         title: '允许发评论',

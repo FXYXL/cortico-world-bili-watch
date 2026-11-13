@@ -38,6 +38,7 @@ import { readDynamicPage } from './core/dynamics.ts';
 import { DynamicPublishing, type DynamicPost, type DynamicPostResult } from './core/dynamic-types.ts';
 import { DynamicAutonomy } from './core/dynamic-autonomy.ts';
 import { getVideo, getSubtitles, fetchDanmaku, probeVideoOid } from './core/video.ts';
+import { sleepState as computeSleep } from './core/sleep.ts';
 import { danmakuOverview, DanmakuPool, spread as spreadList, type Danmaku } from './core/danmaku.ts';
 import { listDmSessions, readDmMessages, sendDm } from './core/dm.ts';
 import { CoWatch } from './watch/coWatch.ts';
@@ -60,6 +61,15 @@ import { buildTimeline } from './webui/data.ts';
 import { videoHistory } from './social/videoHistory.ts';
 
 const ENV_PROMPT_PATH = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
+
+/**
+ * 睡眠期间通知积压的处理阈值。
+ *
+ * 攒到 6 条以上就只留最近 2 条：醒来那一轮 deliver 一次推 3 条、之后每 15 分钟
+ * 再推 3 条，积 10 条要推 40 分钟，而且聊的全是隔夜话题。
+ */
+const SLEEP_BACKLOG_LIMIT = 6;
+const SLEEP_BACKLOG_KEEP = 2;
 
 type Args = Record<string, unknown>;
 
@@ -99,6 +109,8 @@ export class BiliWatchWorld implements World {
   private focusRetryAt = 0;
   /** 已经给过机会的 roamId，避免同一轮反复投递。 */
   private offeredRoamId: string | null = null;
+  /** 只在进入/离开睡眠时各打一条日志，避免每分钟刷屏。 */
+  private sleepLogged = false;
   private ffprobeCheck: { at: number; ok: boolean } = { at: 0, ok: false };
   /** 弹幕池按视频缓存（同一次会话里 probe/storyboard/zoom 共用，不重复拉）。 */
   private readonly danmakuPools = new Map<string, DanmakuPool>();
@@ -496,9 +508,31 @@ export class BiliWatchWorld implements World {
     }
   }
 
+  /** 现在是不是睡眠时间。配置没开、填错，一律 false（宁可多推送也不整天沉默）。 */
+  private sleepNow() {
+    return computeSleep(this.cfg().sleep, this.ctx.timezone);
+  }
+
   /** 把待办投给模型。**每条的正文都要说清"该怎么做"，不能只说"有新消息"**。 */
   private async deliverInbox(): Promise<void> {
     if (!this.host) return;
+
+    const sleep = this.sleepNow();
+    if (sleep.sleeping) {
+      // 睡眠期间不推评论回复；积压太多就先清掉旧的，免得起醒来面对一堆隔夜话题
+      const dropped = this.service.trimBacklog(SLEEP_BACKLOG_KEEP, SLEEP_BACKLOG_LIMIT);
+      if (!this.sleepLogged) {
+        this.sleepLogged = true;
+        this.log(`sleep: 睡眠中，${sleep.until ?? '?'} 前不推闲逛和评论提醒`);
+      }
+      if (dropped) this.log(`sleep: 积压太多，标掉 ${dropped} 条旧通知`);
+      return;
+    }
+    if (this.sleepLogged) {
+      this.sleepLogged = false;
+      this.log('sleep: 醒来，恢复推送');
+    }
+
     await this.service.deliver(async (item) => {
       const acc = this.service.currentAccount;
       await this.host!.pushEvent({
@@ -578,6 +612,8 @@ export class BiliWatchWorld implements World {
     }
 
     if (!st.enabled || this.phase !== 'idle') return;
+    // 睡眠时间不推闲逛机会 —— 直接不 offer，不白耗当天的机会额度
+    if (this.sleepNow().sleeping) return;
     if (this.service.pendingReplies().length > 0) return;
     if (Date.now() - this.idleSince < st.limits.idleMinutes * 60_000) return;
 
@@ -1042,6 +1078,9 @@ export class BiliWatchWorld implements World {
   private async pollDm(): Promise<void> {
     const cfg = this.cfg();
     if (!cfg.dm?.enabled || !this.cookie()) return;
+    // 睡眠期间私信默认照常（"有人专门找她说话"和"评论被回复"不是一回事）。
+    // 彻底静音（allowDm=false）时连轮询都停掉 —— 醒来时水位没动，会补推积压的。
+    if (this.sleepNow().sleeping && cfg.sleep?.allowDm === false) return;
     if (Date.now() - this.dmCheckAt < Math.max(DM_CHECK_MIN_MS, Number(cfg.dm.pollSec) * 1000 || 180_000)) return;
     this.dmCheckAt = Date.now();
     const sessions = await listDmSessions(this.client, { max: 10 }).catch(() => null);
@@ -2549,6 +2588,17 @@ export class BiliWatchWorld implements World {
       text: JSON.stringify({
         world: this.id,
         enabled: cfg.enabled,
+        // 睡眠中要说出来：否则她看到"没闲逛机会、没通知"，会以为插件坏了
+        ...(() => {
+          const sl = this.sleepNow();
+          if (!cfg.sleep?.enabled) return {};
+          return {
+            sleep: sl.sleeping
+              ? `睡眠时间中：${sl.until ?? '?'} 后恢复闲逛和评论提醒` +
+                (cfg.sleep.allowDm === false ? '（连私信也不推）' : '（私信照常）')
+              : `睡眠时间未到（${cfg.sleep.start}–${cfg.sleep.end}）`,
+          };
+        })(),
         login: {
           secret: cfg.cookieSecret,
           hasCookie: Boolean(this.cookie()),

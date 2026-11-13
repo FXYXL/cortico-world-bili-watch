@@ -34,6 +34,7 @@ import { MAX_REPLIES_PER_PERSON } from '../config.ts';
 import type { BiliClient } from '../core/client.ts';
 import { normalizeTarget } from '../core/client.ts';
 import { checkVisibility, readComments, sendComment } from '../core/comments.ts';
+import { sleepState } from '../core/sleep.ts';
 import { BiliError, type CommentTarget, type InboxItem, type SendRecord } from '../core/types.ts';
 import { judgeParticipation } from './judgment.ts';
 import { assessPublicInput, PublicReplySkipped } from './safety.ts';
@@ -517,6 +518,41 @@ export class BiliService {
       );
   }
 
+  /** 现在是不是睡眠时间（配置没开就走 false，不影响原有行为）。 */
+  sleeping(now: Date = new Date()): boolean {
+    return sleepState(this.cfg.sleep, this.d.timezone, now).sleeping;
+  }
+
+  /**
+   * 睡眠期间积压太多时，把最旧的标成"睡过去了"。
+   *
+   * 为什么要在睡眠期间就清：醒来那一轮 deliver 会一次推 3 条、之后每 15 分钟
+   * 再推 3 条，一晚上攒 10 条就要推 40 分钟，而且聊的全是隔夜话题。
+   * 只清**没投递过**的 —— 已经推给她的不能动，那是她看过的上下文。
+   *
+   * @param keep     保留最近几条
+   * @param minTotal 待办超过这个数才动手（少量积压还是全补）
+   * @returns 清掉了几条
+   */
+  trimBacklog(keep: number, minTotal: number): number {
+    const pending = this.d.store
+      .inbox()
+      .filter((i) => i.status === 'pending' && !i.delivered)
+      .sort((a, b) => a.occurredAt - b.occurredAt);
+    if (pending.length <= minTotal) return 0;
+    const drop = pending.slice(0, pending.length - keep);
+    for (const item of drop) {
+      this.d.store.updateInbox(item.id, {
+        status: 'handled',
+        handling: {
+          kind: 'skip',
+          reason: '睡眠时间收到的通知，醒来不补了（积压太多，只留最近的几条）',
+        },
+      });
+    }
+    return drop.length;
+  }
+
   /**
    * 把待办投给模型。
    *
@@ -526,6 +562,9 @@ export class BiliService {
    */
   async deliver(sink: (item: InboxItem) => Promise<void>): Promise<void> {
     if (!this.cfg.monitor.enabled || !this.cfg.posting.enabled) return;
+    // 睡眠时间：一条都不推。**也不标 delivered** —— 醒来还是要能收到（只是会按
+    // trimBacklog 的清法只留最近几条）。私信不走这里，由 world 单独判断。
+    if (this.sleeping()) return;
     if (this.delivering || this.storageLimit()) return;
     this.delivering = true;
     try {

@@ -192,6 +192,16 @@ export interface PostingConfig {
   maxDailyReplies: number;
 }
 
+export interface SleepConfig {
+  /** 关掉就还是 24 小时都在线。默认关：不擅自改变她的作息。 */
+  enabled: boolean;
+  /** "HH:MM"，允许跨午夜（23:30 → 08:00）。 */
+  start: string;
+  end: string;
+  /** 睡眠期间私信照常推（评论回复和闲逛机会一律不推）。 */
+  allowDm: boolean;
+}
+
 export interface ObserveConfig {
   /** 监听通知的周期（秒）。 */
   intervalSec: number;
@@ -211,6 +221,9 @@ export interface BiliWatchConfig {
   dynamics: DynamicsConfig;
   posting: PostingConfig;
   monitor: ObserveConfig;
+
+  /** 睡眠时间：这段时间里不推闲逛机会、不推评论回复（私信可配）。 */
+  sleep: SleepConfig;
 
   /** 视频阅读 */
   read: {
@@ -368,6 +381,9 @@ export const BILI_WATCH_DEFAULTS: BiliWatchConfig = {
   },
 
   monitor: { enabled: true, intervalSec: 60 },
+
+  // 默认关。开了以后 23:30 到 08:00 不推闲逛机会和评论回复，私信照常。
+  sleep: { enabled: false, start: '23:30', end: '08:00', allowDm: true },
 
   read: {
     scanHeight: 480,
