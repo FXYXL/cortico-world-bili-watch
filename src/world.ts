@@ -154,13 +154,19 @@ export class BiliWatchWorld implements World {
     // 陪看：主人发起的场景，构造时不连任何东西（CoWatch 惰性起浏览器）
     this.coWatch = new CoWatch({
       dataDir: ctx.dataDir,
+      // 自动连播换了视频：重新拉一遍字幕，否则新画面配旧字幕
+      onVideoChanged: (v) => void this.loadWatchSubtitles(v),
       // 观察参数每次使用现取快照：改配置即时生效，不用重启 World
       config: () => ({
         executable: this.cfg().watch.executable || undefined,
         windowWidth: this.cfg().watch.windowWidth,
         windowHeight: this.cfg().watch.windowHeight,
         observeIntervalSec: this.cfg().watch.observeIntervalSec,
-        frameDensity: this.cfg().watch.frameDensity,
+        // 密度由"窗口秒数"和"格数上限"反推：**maxFrames 才是她想调的那个旋钮**。
+        // 原来这里传硬编码的 0.3，于是 20 秒窗口只出 6 帧（round(20×0.3)），
+        // 她把格数调到 9 也永远到不了 —— 改间隔反而让帧数变少。
+        frameDensity:
+          this.cfg().watch.maxFrames / Math.max(1, this.cfg().watch.observeIntervalSec),
         maxFrames: this.cfg().watch.maxFrames,
         cellWidth: this.cfg().watch.cellWidth,
         cellHeight: this.cfg().watch.cellHeight,
@@ -923,16 +929,7 @@ export class BiliWatchWorld implements World {
       // 字幕走 HTTP（复用 getSubtitles），灌给陪看层给观察帧用
       try {
         const info = (await this.coWatch.detailedStatus()).video;
-        if (info?.bvid) {
-          const meta = await getVideo(this.client, info.bvid, info.p || 1, callCtx.signal);
-          const sub = await getSubtitles(this.client, meta, callCtx.signal).catch(() => null);
-          if (sub?.available) {
-            this.coWatch.setSubtitles(
-              sub.segments.map((s) => ({ from: s.from, to: s.to, content: s.text })),
-              sub.langDoc,
-            );
-          }
-        }
+        await this.loadWatchSubtitles(info, callCtx.signal);
       } catch {
         /* 字幕失败不影响陪看 */
       }
@@ -2576,6 +2573,31 @@ export class BiliWatchWorld implements World {
       AbortSignal.any([this.controller.signal, AbortSignal.timeout(150_000)]),
       () => Boolean(this.cfg().dynamics.enabled && this.cfg().dynamics.allowPublishing),
     );
+  }
+
+  /**
+   * 给陪看层灌字幕（观察帧里要附"这段在说什么"）。
+   *
+   * open 之后和**自动连播换台之后**都要调：陪看层自己不发 B 站请求，
+   * 换台了不重拉就是新画面配旧字幕。
+   */
+  private async loadWatchSubtitles(
+    video: { bvid?: string; p?: number } | null | undefined,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!video?.bvid) return;
+    try {
+      const meta = await getVideo(this.client, video.bvid, video.p || 1, signal ?? this.controller.signal);
+      const sub = await getSubtitles(this.client, meta, signal ?? this.controller.signal).catch(() => null);
+      if (sub?.available) {
+        this.coWatch.setSubtitles(
+          sub.segments.map((s) => ({ from: s.from, to: s.to, content: s.text })),
+          sub.langDoc,
+        );
+      }
+    } catch {
+      /* 字幕失败不影响陪看 */
+    }
   }
 
   private async status(): Promise<ToolOutcome> {

@@ -221,6 +221,8 @@ export class WatchBrowser {
   private starting: Promise<Page> | null = null;
   /** CDP 里看到待取体的 URL（requestId → url）。 */
   private readonly pendingBodies = new Map<string, string>();
+  /** 上一次抽帧为什么失败（给上层日志用 —— 以前异常被吞，只剩一句"采样失败"）。 */
+  private lastSampleError = '';
 
   constructor(opts: Partial<WatchBrowserOptions> & Pick<WatchBrowserOptions, 'dataDir' | 'cookie' | 'onDanmaku' | 'onLost'>) {
     this.o = {
@@ -518,10 +520,56 @@ export class WatchBrowser {
   }
 
   /** 一格采样（cell JPEG + 64×36 亮度图）。播放器没就绪返回 null。 */
+  /** 上一次 sample() 失败的原因；成功则清空。 */
+  get sampleError(): string {
+    return this.lastSampleError;
+  }
+
   async sample(cellLong: number, cellShort: number, quality: number): Promise<Sample | null> {
     const page = this.page;
-    if (!page || page.isClosed()) return null;
-    return (await page.evaluate(`(${SAMPLE_FRAME})(${cellLong}, ${cellShort}, ${quality})`).catch(() => null)) as Sample | null;
+    if (!page || page.isClosed()) {
+      this.lastSampleError = '页面已关闭';
+      return null;
+    }
+    // 把"为什么抽不出来"问清楚再返回：
+    // 没有 video / 没就绪 / 尺寸为 0 / canvas 被跨域污染，四种原因修法完全不同，
+    // 只回一句 null 就永远查不出是哪一种（实测日志里只剩「采样失败」四个字）。
+    const probe = `(() => {
+      const v = document.querySelector('video');
+      if (!v) return { err: '页面里没有 video 元素' };
+      if (v.readyState < 2) return { err: '视频还没就绪（readyState=' + v.readyState + '）' };
+      if (!v.videoWidth) return { err: '视频尺寸为 0（可能还没解码出画面）' };
+      try {
+        const out = (${SAMPLE_FRAME})(${cellLong}, ${cellShort}, ${quality});
+        return out ? { ok: out } : { err: '抽帧返回空' };
+      } catch (e) {
+        return { err: '抽帧被拒：' + (e && e.name ? e.name + ' ' : '') + (e && e.message ? e.message : e) };
+      }
+    })()`;
+    try {
+      // 页面卡住时 evaluate 会一直挂着（默认没有超时）—— 实测能让采样彻底停摆。
+      // 3 秒拿不到就当我们这轮没抽到，把位置让出来。
+      const r = (await Promise.race([
+        page.evaluate(probe) as Promise<{ ok?: Sample; err?: string } | null>,
+        new Promise<{ err: string }>((resolve) => {
+          const t = setTimeout(() => resolve({ err: '抽帧超时（页面 3 秒没响应）' }), 3000);
+          t.unref?.();
+        }),
+      ])) as { ok?: Sample; err?: string } | null;
+      if (!r) {
+        this.lastSampleError = '页面脚本返回空';
+        return null;
+      }
+      if (r.err) {
+        this.lastSampleError = r.err.slice(0, 300);
+        return null;
+      }
+      this.lastSampleError = '';
+      return r.ok ?? null;
+    } catch (e) {
+      this.lastSampleError = String((e as Error)?.message ?? e).slice(0, 300);
+      return null;
+    }
   }
 
   /** 当前帧（look 用）。 */

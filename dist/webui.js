@@ -154,6 +154,29 @@ var BILI_WATCH_CONFIG_GROUP = {
         maximum: 3600,
         "x-hot": true
       },
+      "worlds.bili-watch.sleep.enabled": {
+        type: "boolean",
+        title: "\u7761\u7720\u65F6\u95F4\uFF08\u8FD9\u6BB5\u65F6\u95F4\u522B\u6253\u6270\u5979\uFF09",
+        description: "\u5F00\u4E86\u4EE5\u540E\uFF0C\u8FD9\u6BB5\u65F6\u95F4\u91CC**\u4E0D\u63A8\u95F2\u901B\u673A\u4F1A\u3001\u4E0D\u63A8\u8BC4\u8BBA\u56DE\u590D\u63D0\u9192**\u3002\u79C1\u4FE1\u8981\u4E0D\u8981\u901A\u89C1\u4E0B\u4E00\u9879\u3002\u9ED8\u8BA4\u5173 \u2014\u2014 \u4E0D\u64C5\u81EA\u6539\u5979\u7684\u4F5C\u606F\u3002",
+        "x-hot": true
+      },
+      "worlds.bili-watch.sleep.start": {
+        type: "string",
+        title: "\u51E0\u70B9\u7761",
+        pattern: "^([01]?\\d|2[0-3]):[0-5]\\d$",
+        description: '24 \u5C0F\u65F6\u5236\uFF0C\u4F8B\u5982 `23:30`\u3002**\u53EF\u4EE5\u6BD4"\u51E0\u70B9\u9192"\u665A**\uFF08\u8868\u793A\u8DE8\u5348\u591C\uFF09\u3002'
+      },
+      "worlds.bili-watch.sleep.end": {
+        type: "string",
+        title: "\u51E0\u70B9\u9192",
+        pattern: "^([01]?\\d|2[0-3]):[0-5]\\d$",
+        description: "\u4F8B\u5982 `08:00`\u3002\u9192\u6765\u540E\u79EF\u538B\u7684\u901A\u77E5\u4E0D\u4F1A\u88AB\u4E00\u6B21\u6027\u704C\u8FDB\u6765\uFF1A\u8D85\u8FC7 6 \u6761\u65F6\u53EA\u8865\u6700\u8FD1 2 \u6761\uFF0C\u66F4\u65E9\u7684\u6807\u6210\u300C\u7761\u8FC7\u53BB\u4E86\u300D\u3002"
+      },
+      "worlds.bili-watch.sleep.allowDm": {
+        type: "boolean",
+        title: "\u7761\u7720\u671F\u95F4\u79C1\u4FE1\u7167\u5E38",
+        description: '\u79C1\u4FE1\u662F\u6709\u4EBA\u4E13\u95E8\u627E\u5979\u8BF4\u8BDD\uFF0C\u548C"\u8BC4\u8BBA\u88AB\u4EBA\u56DE\u590D"\u4E0D\u662F\u4E00\u56DE\u4E8B\uFF0C\u6240\u4EE5\u9ED8\u8BA4\u53EF\u901A\u3002\u5173\u6389\u5C31\u662F\u5F7B\u5E95\u9759\u97F3\uFF08\u8FDE\u79C1\u4FE1\u4E5F\u4E0D\u63A8\uFF09\u3002'
+      },
       "worlds.bili-watch.posting.enabled": {
         type: "boolean",
         title: "\u5141\u8BB8\u53D1\u8BC4\u8BBA",
@@ -709,6 +732,8 @@ var BILI_WATCH_DEFAULTS = {
     maxDailyReplies: 80
   },
   monitor: { enabled: true, intervalSec: 60 },
+  // 默认关。开了以后 23:30 到 08:00 不推闲逛机会和评论回复，私信照常。
+  sleep: { enabled: false, start: "23:30", end: "08:00", allowDm: true },
   read: {
     scanHeight: 480,
     zoomHeight: 1080,
