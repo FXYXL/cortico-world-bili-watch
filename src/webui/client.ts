@@ -827,6 +827,133 @@ export function mountSettings(ctx: WebUiPanelContext): void {
   void reload();
 }
 
+/* ------------------------------------------------------------------ 画集 */
+
+interface GalleryItem {
+  id: string;
+  at: string;
+  kind: string;
+  label: string;
+  bytes: number;
+  title?: string;
+  bvid?: string;
+}
+
+/**
+ * 点开一张图（全屏浮层）。
+ *
+ * 图是**按需**取的：列表只回元数据，点哪张取哪张 —— 一场陪看 180 张，
+ * 一次性 base64 塞进面板会直接卡死。
+ */
+async function openImage(ctx: WebUiPanelContext, id: string, caption: string): Promise<void> {
+  const layer = el('div', null, 'bw-lightbox');
+  const box = el('div', null, 'bw-lightbox-box');
+  const img = document.createElement('img');
+  img.alt = caption;
+  const note = el('div', caption, 'bw-lightbox-note');
+  box.append(img, note);
+  layer.append(box);
+  const close = () => layer.remove();
+  layer.addEventListener('click', close);
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      close();
+      document.removeEventListener('keydown', onKey);
+    }
+  };
+  document.addEventListener('keydown', onKey);
+  document.body.append(layer);
+  try {
+    const r = await ctx.invoke<{ dataUrl?: string; error?: string }>('gallery-image', [{ id }]);
+    if (r?.dataUrl) img.src = r.dataUrl;
+    else note.textContent = r?.error ?? '这张图打不开了';
+  } catch (error) {
+    note.textContent = `取图失败：${(error as Error).message}`;
+  }
+}
+
+/**
+ * 一个画集格子：按钮 + 缩略图。
+ *
+ * 缩略图用 IntersectionObserver 懒加载 —— 打开面板时通常只看得到前几张，
+ * 不该把 60 张都读进内存。滚到了才取。
+ */
+function galleryBlock(
+  ctx: WebUiPanelContext,
+  query: { watchId?: string; roamId?: string; oid?: string },
+): { box: HTMLElement; load: () => void } {
+  const box = el('div', null, 'bw-gallery');
+  let started = false;
+
+  const load = (): void => {
+    if (started) return;
+    started = true;
+    box.append(el('div', '读取画集…', 'bw-muted'));
+    void (async () => {
+      try {
+        const r = await ctx.invoke<{ total: number; items: GalleryItem[] }>('gallery', [
+          { ...query, limit: 60 },
+        ]);
+        box.textContent = '';
+        if (!r?.total) {
+          box.append(el('div', '这一场没留图（陪看/阅读时才会有）。', 'bw-muted'));
+          return;
+        }
+        const grid = el('div', null, 'bw-gallery-grid');
+        const io =
+          typeof IntersectionObserver === 'function'
+            ? new IntersectionObserver(
+                (entries) => {
+                  for (const e of entries) {
+                    if (!e.isIntersecting) continue;
+                    io?.unobserve(e.target);
+                    const cell = e.target as HTMLElement;
+                    const id = cell.dataset.id ?? '';
+                    void ctx
+                      .invoke<{ dataUrl?: string }>('gallery-image', [{ id }])
+                      .then((img) => {
+                        if (!img?.dataUrl) return;
+                        const im = document.createElement('img');
+                        im.src = img.dataUrl;
+                        im.alt = cell.dataset.label ?? '';
+                        cell.prepend(im);
+                      })
+                      .catch(() => {
+                        /* 单张失败就算了 */
+                      });
+                  }
+                },
+                { rootMargin: '240px' },
+              )
+            : null;
+        for (const item of r.items) {
+          const cell = el('button', null, 'bw-thumb') as HTMLButtonElement;
+          cell.dataset.id = item.id;
+          cell.dataset.label = `${item.label} · ${when(item.at)}`;
+          cell.title = cell.dataset.label;
+          cell.append(el('span', `${item.label}`, 'bw-thumb-label'));
+          cell.addEventListener('click', () =>
+            void openImage(ctx, item.id, `${item.label} · ${when(item.at)}`),
+          );
+          grid.append(cell);
+          io?.observe(cell);
+        }
+        box.append(grid);
+        if (r.total > r.items.length) {
+          box.append(
+            el('div', `还有 ${r.total - r.items.length} 张没列出来（一次最多 60 张）`, 'bw-muted'),
+          );
+        }
+      } catch (error) {
+        box.textContent = '';
+        box.append(el('div', `画集读取失败：${(error as Error).message}`, 'bw-muted'));
+      }
+    })();
+  };
+
+  return { box, load };
+}
+
 /** 闲逛记录页：全量轮次，分页翻。 */
 export function mountRoams(ctx: WebUiPanelContext): void {
   const root = ctx.root;
@@ -860,6 +987,8 @@ export function mountRoams(ctx: WebUiPanelContext): void {
     searches: number;
     summary?: string;
     videos: Array<{ title: string; url?: string; commentsRead: number }>;
+    /** 这一轮她收到的图（分镜图/字幕长图）。 */
+    images?: number;
   }
 
   const statusText = (s: string) =>
@@ -898,6 +1027,7 @@ export function mountRoams(ctx: WebUiPanelContext): void {
         tags.append(tag(`看了 ${item.videos.length} 个视频`));
         tags.append(tag(`搜索 ${item.searches} 次`));
         if (item.summary) tags.append(tag('有心得'));
+        if (item.images) tags.append(tag(`画集 ${item.images} 张`, 'roam'));
         main.append(tags);
         const side = el('div', null, 'bw-card-side');
         side.append(el('span', '点开看明细', 'bw-open-label'));
@@ -928,6 +1058,163 @@ export function mountRoams(ctx: WebUiPanelContext): void {
           if (v.commentsRead) line.append(tag(`评论 ${v.commentsRead} 条`));
           row.append(line);
           body.append(row);
+        }
+        if (item.images) {
+          const g = galleryBlock(ctx, { roamId: item.id });
+          const toggle = el('button', `看这一轮的画集（${item.images} 张）`, 'bw-gallery-toggle');
+          toggle.addEventListener('click', () => {
+            const open = g.box.classList.toggle('is-open');
+            toggle.textContent = open
+              ? `收起画集（${item.images} 张）`
+              : `看这一轮的画集（${item.images} 张）`;
+            if (open) g.load();
+          });
+          body.append(toggle, g.box);
+        }
+        card.append(body);
+        list.append(card);
+      }
+    } catch (error) {
+      list.textContent = '';
+      list.append(el('div', `读取失败：${(error as Error).message}`, 'bw-empty'));
+    }
+  }
+
+  prev.addEventListener('click', () => {
+    if (page > 1) {
+      page -= 1;
+      void load();
+    }
+  });
+  next.addEventListener('click', () => {
+    if (page * pageSize < total) {
+      page += 1;
+      void load();
+    }
+  });
+
+  void load();
+  ctx.interval(() => void load(), 60_000);
+}
+
+/** 陪看记录页：每一场「一起看」一条，能翻当时的画集。 */
+export function mountWatches(ctx: WebUiPanelContext): void {
+  const root = ctx.root;
+  root.classList.add('bw-desk', 'bw-watches');
+
+  root.append(
+    el(
+      'p',
+      '每一场一起看：看的哪条、看了多久、留了哪些画面、她自己写的一句话。最近在前。',
+      'bw-summary',
+    ),
+  );
+
+  const info = el('p', '', 'bw-summary');
+  const list = el('div', null, 'bw-list');
+  const pager = el('div', null, 'bw-pager');
+  const prev = el('button', '上一页');
+  const next = el('button', '下一页');
+  const pageLabel = el('span', '', 'bw-muted');
+  pager.append(prev, pageLabel, next);
+  root.append(info, list, pager);
+
+  interface WatchItem {
+    id: string;
+    title: string;
+    bvid?: string;
+    duration: number;
+    startedAt: string;
+    endedAt?: string;
+    frames: number;
+    summary?: string;
+    end?: 'exit' | 'gone' | 'switch' | 'open';
+    images?: number;
+  }
+
+  const lenText = (sec: number): string => {
+    const s = Math.max(0, Math.round(Number(sec) || 0));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+  const endText = (end: string | undefined): string =>
+    end === 'gone' ? '窗口自己关了' : end === 'switch' ? '换片了' : end === 'exit' ? '正常关窗' : '还开着';
+
+  let page = 1;
+  let total = 0;
+  const pageSize = 20;
+
+  async function load(): Promise<void> {
+    try {
+      const r = await ctx.invoke<{ total: number; items: WatchItem[] }>('watches', [
+        { page, pageSize },
+      ]);
+      total = r.total;
+      const pages = Math.max(1, Math.ceil(total / pageSize));
+      page = Math.min(page, pages);
+      info.textContent = `共 ${total} 场 · 每页 ${pageSize} 条`;
+      pageLabel.textContent = `${page} / ${pages}`;
+      prev.disabled = page <= 1;
+      next.disabled = page >= pages;
+
+      list.textContent = '';
+      if (!r.items.length) {
+        list.append(
+          el('div', '还没有陪看记录。主人说「陪我看xxx」之后，每一场都会记在这里。', 'bw-empty'),
+        );
+        return;
+      }
+      for (const item of r.items) {
+        const card = el('details', null, 'bw-card') as HTMLDetailsElement;
+        const sum = el('summary');
+        const main = el('div', null, 'bw-card-main');
+        main.append(el('h4', `《${short(item.title, 60)}》 · ${when(item.startedAt)}`));
+        const tags = el('div', null, 'bw-tags');
+        tags.append(tag(item.duration > 0 ? `${lenText(item.duration)} 的片子` : '时长未知'));
+        tags.append(tag(`${item.frames} 帧`));
+        tags.append(tag(endText(item.end)));
+        if (item.summary) tags.append(tag('有总结', 'sent'));
+        else tags.append(tag('没写总结'));
+        if (item.images) tags.append(tag(`画集 ${item.images} 张`, 'roam'));
+        main.append(tags);
+        const side = el('div', null, 'bw-card-side');
+        side.append(el('span', '点开看明细', 'bw-open-label'));
+        sum.append(main, side);
+        card.append(sum);
+
+        const body = el('div', null, 'bw-thread');
+        if (item.bvid) {
+          const a = el('a', `打开这条视频（${item.bvid}）`);
+          (a as HTMLAnchorElement).href = `https://www.bilibili.com/video/${item.bvid}/`;
+          (a as HTMLAnchorElement).target = '_blank';
+          (a as HTMLAnchorElement).rel = 'noopener noreferrer';
+          body.append(a);
+        }
+        if (item.summary) {
+          const row = el('div', null, 'bw-event');
+          row.append(el('div', '她的总结', 'bw-speaker'), el('div', item.summary, 'bw-body'));
+          body.append(row);
+        } else {
+          body.append(
+            el(
+              'div',
+              item.end === 'open'
+                ? '这一场还开着，关窗时她会写一句（可选）。'
+                : '这一场没写总结（关窗时是可选的）。画面都留着，在下面的画集里。',
+              'bw-muted',
+            ),
+          );
+        }
+        if (item.images) {
+          const g = galleryBlock(ctx, { watchId: item.id });
+          const toggle = el('button', `看这一场的画集（${item.images} 张）`, 'bw-gallery-toggle');
+          toggle.addEventListener('click', () => {
+            const open = g.box.classList.toggle('is-open');
+            toggle.textContent = open
+              ? `收起画集（${item.images} 张）`
+              : `看这一场的画集（${item.images} 张）`;
+            if (open) g.load();
+          });
+          body.append(toggle, g.box);
         }
         card.append(body);
         list.append(card);
@@ -960,5 +1247,6 @@ export default {
     desk: { mount: mountDesk },
     settings: { mount: mountSettings },
     roams: { mount: mountRoams },
+    watches: { mount: mountWatches },
   },
 };

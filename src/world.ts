@@ -49,6 +49,8 @@ import { OwnerFocus, type FocusSource } from './social/focus.ts';
 import { judgeParticipation } from './social/judgment.ts';
 import { assessPublicInput, PublicReplySkipped } from './social/safety.ts';
 import { Roaming } from './social/roaming.ts';
+import { Gallery } from './social/gallery.ts';
+import type { WatchSession } from './social/watchLog.ts';
 import { SocialStore } from './social/store.ts';
 import { loadTranscript } from './read/transcript.ts';
 import { audioHint } from './read/audio-hint.ts';
@@ -117,10 +119,15 @@ export class BiliWatchWorld implements World {
   private dmCheckAt = 0;
   /** 陪看（一起看）：主人发起。配置读取走 getter，改配置即时生效。 */
   private readonly coWatch: CoWatch;
+  /** 画集：她收到过的图（自己存一份 —— 宿主 media 目录不保证留着观察帧）。 */
+  private readonly gallery: Gallery;
+  /** 正在进行的这一场陪看。open 时建，exit / 窗口丢失时收尾落库。 */
+  private currentWatch: WatchSession | null = null;
 
   constructor(private readonly ctx: WorldContext<BiliWatchConfig>) {
     const dirs = ensureDirs(ctx.dataDir);
     this.store = new SocialStore(dirs.state, () => ({}));
+    this.gallery = new Gallery(dirs.root);
     this.client = new BiliClient({
       cookie: () => this.cookie(),
       saveCookie: (c) => this.saveCookie(c),
@@ -156,6 +163,8 @@ export class BiliWatchWorld implements World {
       dataDir: ctx.dataDir,
       // 自动连播换了视频：重新拉一遍字幕，否则新画面配旧字幕
       onVideoChanged: (v) => void this.loadWatchSubtitles(v),
+      // 窗口被关掉/浏览器退出：把这一场陪看收尾，别让它永远停在"进行中"
+      onClosed: () => this.closeWatch('gone'),
       // 观察参数每次使用现取快照：改配置即时生效，不用重启 World
       config: () => ({
         executable: this.cfg().watch.executable || undefined,
@@ -202,6 +211,27 @@ export class BiliWatchWorld implements World {
       // 空闲时没消费者就一直攒，攒到窗口关了 render 一跑 state=off 全丢弃——
       // 真机首秀 14 个观察帧 0 条到达就是这条路径。
       deliver: (rendered) => {
+        // 画集：观察帧留一份，面板里能翻（宿主的 media 目录不保存 pushEvent 的图）
+        try {
+          if (rendered.blobs?.length) {
+            const w = this.currentWatch;
+            const at =
+              rendered.frameAt !== undefined
+                ? `${rendered.mode === 'ending' ? '结尾' : '观察帧'} ${clock(rendered.frameAt)}`
+                : undefined;
+            this.gallery.record(rendered.blobs, {
+              kind: 'watch',
+              ...(w ? { watchId: w.id } : {}),
+              ...(w?.bvid ? { bvid: w.bvid } : {}),
+              ...(w?.aid ? { oid: w.aid } : {}),
+              ...(w?.title ? { title: w.title } : {}),
+              ...(at ? { label: at } : {}),
+            });
+            if (w) w.frames += 1;
+          }
+        } catch (e) {
+          this.log(`画集记录失败：${(e as Error).message}`);
+        }
         try {
           this.host?.pushEvent(
             {
@@ -866,7 +896,8 @@ export class BiliWatchWorld implements World {
         const roamId = typeof args?.roamId === 'string' && args.roamId ? args.roamId : undefined;
         try {
           const outcome = await handlers[decl.name](args ?? {}, callCtx ?? {});
-          return this.roamHandoff(roamId, outcome) ?? outcome;
+          const recorded = this.recordToolImages(decl.name, args ?? {}, outcome);
+          return this.roamHandoff(roamId, recorded) ?? recorded;
         } catch (error) {
           /**
            * `PublicReplySkipped` 不是失败 —— 是本机规则明确决定"这条不发"。
@@ -903,6 +934,66 @@ export class BiliWatchWorld implements World {
    * 陪看（一起看）：主人发起——开一个**看得见的**浏览器窗口，鱼看同一个画面，
    * 观察帧（拼图+字幕+弹幕）定时推给她。工具只做控制与取景，观察循环在 CoWatch。
    */
+  /**
+   * 收尾这一场陪看并落库。
+   *
+   * 三种结束方式都要收：`exit`（正常关窗）、`gone`（窗口/浏览器自己没了）、
+   * `switch`（开着又 open 另一条 = 换片）。真机上 `gone` 才是常态 ——
+   * 13:12 那次浏览器断开，exit 根本没调到，不收尾就永远停在"进行中"。
+   *
+   * @param frames 陪看层自己数的帧数；它比画集条数准（画集可能写失败）
+   */
+  private closeWatch(
+    end: 'exit' | 'gone' | 'switch',
+    summary?: string,
+    frames?: number,
+    /** 调用方先抓好的那一场（exit 时 browser.stop() 可能已经把它记成 gone 了）。 */
+    only?: WatchSession,
+  ): void {
+    const w = only ?? this.currentWatch;
+    if (!w) return;
+    if (this.currentWatch?.id === w.id) this.currentWatch = null;
+    const done: WatchSession = {
+      ...w,
+      endedAt: new Date().toISOString(),
+      frames: Math.max(w.frames, Math.max(0, Math.round(Number(frames) || 0))),
+      end,
+      ...(summary?.trim() ? { summary: summary.trim().slice(0, 600) } : {}),
+    };
+    try {
+      this.store.saveWatch(done);
+    } catch (e) {
+      this.log(`陪看记录落库失败：${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * 工具交付的图也收进画集（分镜图、字幕长图）。
+   *
+   * 挂在**工具统一出口**上：`video_storyboard` / `video_subtitles` 都是"读完给图"，
+   * 各自加一遍 hook 迟早漏一个。归属尽量从参数和当前闲逛轮次推：
+   * 她闲逛时调的图，就归到那一轮，面板里点轮次能翻。
+   */
+  private recordToolImages(tool: string, args: Args, outcome: ToolOutcome): ToolOutcome {
+    if (!outcome.blobs?.length) return outcome;
+    try {
+      const t = (args.target ?? {}) as { oid?: unknown };
+      const oid = t.oid !== undefined && t.oid !== null ? String(t.oid) : undefined;
+      // **不是** this.roaming.active —— Roaming 没有这个字段，活动轮次要经 status() 取
+      const roamId =
+        String(args.roamId ?? '').trim() || this.roaming.status().active?.id;
+      this.gallery.record(outcome.blobs, {
+        kind: tool === 'video_subtitles' ? 'strip' : 'storyboard',
+        tool,
+        ...(oid ? { oid } : {}),
+        ...(roamId ? { roamId } : {}),
+      });
+    } catch (e) {
+      this.log(`画集记录失败：${(e as Error).message}`);
+    }
+    return outcome;
+  }
+
   private async watchTool(args: Args, callCtx: { signal?: AbortSignal }): Promise<ToolOutcome> {
     const cfg = this.cfg();
     if (!cfg.watch.enabled) throw new Error('陪看没开（配置页「陪看」开关）。');
@@ -925,14 +1016,29 @@ export class BiliWatchWorld implements World {
     if (action === 'open') {
       const input = String(args.video ?? '').trim();
       if (!input) throw new Error('action=open 需要 video（BV 号或链接）。');
+      // 已经开着又 open 一次 = 换片：先把上一场收尾，别把两场记成一场
+      if (this.currentWatch) this.closeWatch('switch');
       const r = await this.coWatch.open(input);
+      let info: { bvid?: string; title?: string } | null = null;
       // 字幕走 HTTP（复用 getSubtitles），灌给陪看层给观察帧用
       try {
-        const info = (await this.coWatch.detailedStatus()).video;
+        info = (await this.coWatch.detailedStatus()).video;
         await this.loadWatchSubtitles(info, callCtx.signal);
       } catch {
         /* 字幕失败不影响陪看 */
       }
+      // 先落一条"进行中"：窗口意外断开时，exit 根本调不到，靠的就是这条
+      const watch: WatchSession = {
+        id: randomUUID(),
+        title: r.title || info?.title || '视频',
+        ...(info?.bvid ? { bvid: info.bvid } : {}),
+        duration: r.duration,
+        startedAt: new Date().toISOString(),
+        frames: 0,
+        end: 'open',
+      };
+      this.currentWatch = watch;
+      this.store.saveWatch(watch);
       return {
         text:
           `窗口已打开：${r.title ? `《${r.title}》` : '视频'}（${clock(r.duration)}）。` +
@@ -967,10 +1073,17 @@ export class BiliWatchWorld implements World {
     }
 
     if (action === 'exit') {
+      const summary = String(args.summary ?? '').trim();
+      // **先把这一场抓在手里**：coWatch.exit() 里的 browser.stop() 会触发 onLost，
+      // 那一下会把 currentWatch 清掉并记成 gone —— 之后再按 exit 收尾就找不到对象了，
+      // 总结会白写（真机最容易踩的就是这种顺序）。
+      const w = this.currentWatch;
       const r = await this.coWatch.exit();
+      this.closeWatch('exit', summary, r.scenes, w ?? undefined);
       return {
         text:
-          `窗口已关。这轮一起看了约 ${r.watchedMin} 分钟、${r.scenes} 个观察帧。` +
+          `窗口已关。这轮一起看了约 ${r.watchedMin} 分钟、${r.scenes} 个观察帧，` +
+          (summary ? '总结也记下了。' : '这条记录已经存进陪看记录（没写总结）。') +
           (r.watchedMin >= 3 ? '跟主人说一声收尾（你看了什么、印象最深的是什么）。' : ''),
       };
     }
@@ -2886,6 +2999,51 @@ export class BiliWatchWorld implements World {
               ...(v.url ? { url: v.url } : {}),
               commentsRead: v.commentsRead,
             })),
+            // 这一轮她收到的图（分镜图/字幕长图），面板里点开能翻
+            images: this.gallery.list({ roamId: r.id, limit: 1 }).total,
+          })),
+        };
+      }
+      case 'gallery': {
+        // 画集：只给元数据（一次塞十几张 base64 会把面板卡住），图按需走 gallery-image
+        const o = (args[0] ?? {}) as {
+          watchId?: string;
+          roamId?: string;
+          oid?: string;
+          kind?: string;
+          limit?: number;
+          offset?: number;
+        };
+        return this.gallery.list({
+          ...(o.watchId ? { watchId: String(o.watchId) } : {}),
+          ...(o.roamId ? { roamId: String(o.roamId) } : {}),
+          ...(o.oid ? { oid: String(o.oid) } : {}),
+          ...(o.kind ? { kind: o.kind as 'watch' | 'storyboard' | 'strip' | 'other' } : {}),
+          limit: Number(o.limit) || 60,
+          offset: Number(o.offset) || 0,
+        });
+      }
+      case 'gallery-image': {
+        const raw = args[0];
+        const id = typeof raw === 'string' ? raw : String((raw as { id?: string })?.id ?? '');
+        const r = this.gallery.read(id);
+        return r
+          ? { dataUrl: r.dataUrl, mime: r.mime, label: r.entry.label, at: r.entry.at }
+          : { error: '这张图已经不在了（画集只保留最近的，或者文件被清过）' };
+      }
+      case 'watches': {
+        // 陪看记录：每一场一条（标题/时长/帧数/总结/图片数）
+        const o = (args[0] ?? {}) as { page?: number; pageSize?: number };
+        const pageSize = Math.max(5, Math.min(50, Number(o.pageSize) || 20));
+        const page = Math.max(1, Number(o.page) || 1);
+        const all = this.store.watches().slice().reverse();
+        return {
+          total: all.length,
+          page,
+          pageSize,
+          items: all.slice((page - 1) * pageSize, page * pageSize).map((w) => ({
+            ...w,
+            images: this.gallery.list({ watchId: w.id, limit: 1 }).total,
           })),
         };
       }
@@ -3067,11 +3225,23 @@ export class BiliWatchWorld implements World {
           title: en ? 'Roaming log' : '闲逛记录',
           description: en
             ? 'Every autonomous browsing round, paged.'
-            : '它自己去看视频的每一轮，分页翻全量记录。',
+            : '它自己去看视频的每一轮，分页翻全量记录。点一轮能看它当时的画集。',
+        },
+        {
+          id: 'watches',
+          title: en ? 'Co-watching log' : '陪看记录',
+          description: en
+            ? 'Every co-watching session: what was on, how long, the frames it saw, and its own note.'
+            : '每一场一起看的记录：看的哪条、看了多久、留了哪些画面、她自己写的一句话。',
         },
       ],
       invoke: (async (panel: string, method: string, args: unknown[]) => {
-        if (panel !== 'desk' && panel !== 'settings' && panel !== 'roams') {
+        if (
+          panel !== 'desk' &&
+          panel !== 'settings' &&
+          panel !== 'roams' &&
+          panel !== 'watches'
+        ) {
           throw new Error('面板不存在');
         }
         return await this.panelInvoke(method, args ?? []);

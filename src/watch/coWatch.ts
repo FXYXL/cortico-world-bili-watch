@@ -63,7 +63,14 @@ export interface CoWatchOptions {
    * 这样全军覆没的（0 条）。pushEvent 落库即投，是被 bili.inbox/dm/roam
    * 实证过能到达模型的路径。
    */
-  deliver: (rendered: { text: string; blobs: FrameBlob[] }) => void;
+  deliver: (rendered: {
+    text: string;
+    blobs: FrameBlob[];
+    /** 这一帧对应的视频时刻（秒）。画集拿它做标签，例如「观察帧 1:20」。 */
+    frameAt?: number;
+    /** playing = 播放中的观察帧；ending = 播完补的最后一段。 */
+    mode?: 'playing' | 'ending';
+  }) => void;
   /** 最近这几分钟有没有主人在说话（world 查事件流实现）。 */
   humanAround: () => boolean;
   /**
@@ -73,6 +80,13 @@ export interface CoWatchOptions {
    * 通知 world 重新拉一遍字幕 —— 否则她看的是新画面、配的是旧字幕。
    */
   onVideoChanged?: (video: VideoInfo) => void;
+  /**
+   * 窗口/浏览器自己没了（不是 exit）。
+   *
+   * world 用它把这一场陪看收尾 —— 真机 13:12 那次就是这样断的，exit 根本没调到；
+   * 不收尾的话那场记录就永远停在"进行中"。
+   */
+  onClosed?: (reason: 'gone') => void;
   log: (msg: string) => void;
 }
 
@@ -180,6 +194,11 @@ export class CoWatch {
           this.stopTimers();
           this.state = 'off';
           this.o.log('陪看窗口丢失，回到 off');
+          try {
+            this.o.onClosed?.('gone');
+          } catch {
+            /* 收尾失败不影响关窗 */
+          }
           // 鱼得知道窗口没了，不然她还以为在陪看
           try {
             this.o.deliver({
@@ -527,7 +546,7 @@ export class CoWatch {
       if (tail) {
         this.scenes += 1;
         this.countFrame();
-        this.o.deliver(tail);
+        this.o.deliver({ ...tail, frameAt: t1, mode: 'ending' });
         return;
       }
 
@@ -699,7 +718,12 @@ export class CoWatch {
   }
 
   /** 投递时刻才真正构建观察帧（宿主 debounce 后调 render）。 */
-  async renderScene(): Promise<{ text: string; blobs: FrameBlob[] } | null> {
+  async renderScene(): Promise<{
+    text: string;
+    blobs: FrameBlob[];
+    frameAt?: number;
+    mode?: 'playing' | 'ending';
+  } | null> {
     this.observeQueued = false;
     try {
       if (this.state !== 'watching') return null;
@@ -774,7 +798,7 @@ export class CoWatch {
       this.countFrame();
 
       this.armObservation();
-      return built;
+      return { ...built, frameAt: t1, mode: 'playing' };
     } catch (e) {
       this.o.log(`观察帧渲染失败：${(e as Error).message}`);
       this.armObservation();

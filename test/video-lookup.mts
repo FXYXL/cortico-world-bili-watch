@@ -14,22 +14,34 @@ copyFileSync(SRC, `${DIR}/state.json`);
 
 // 注入超限数据：1 条 400 字长评 + 10 条短评（让 said 超过 8 条预算）
 import { readFileSync, writeFileSync } from 'node:fs';
+/** 从真实 state 里挑一条最新的、带 BV 号的视频当靶子 —— 写死 id 迟早滚出去。 */
+let TARGET = { bvid: '', aid: '' };
 {
   const st = JSON.parse(readFileSync(`${DIR}/state.json`, 'utf8'));
+  for (const round of [...(st.roaming ?? [])].reverse()) {
+    const v = (round.videos ?? []).find((x: any) => /^BV[0-9A-Za-z]{10}$/.test(String(x.id ?? '')));
+    if (v) {
+      TARGET = { bvid: v.id, aid: String(v.aid) };
+      break;
+    }
+  }
+  if (!TARGET.aid) throw new Error('state 里找不到带 BV 号的闲逛视频');
+  console.log(`靶子：${TARGET.bvid} (aid=${TARGET.aid})`);
+  const st2 = st;
   const long = '这条视频我反反复复看了三遍。' + '邹忌讽齐王纳谏的骨架放在 AI 身上意外地贴，'.repeat(12) +
     '尤其是「 me beauté 与北美 GPT 孰美」那段，弹幕全在刷慎到。';
   const mk = (i: number, text: string) => ({
     id: `test-fold-${i}`, operationId: `bilibili:test-fold-${i}`, requestId: `test-fold-${i}`,
     accountId: '3747576750804208', platform: 'bilibili',
-    target: { oid: '117469737916999', type: 1, root: '0', parent: '0' },
+    target: { oid: TARGET.aid, type: 1, root: '0', parent: '0' },
     text, kind: 'proactive', status: 'sent',
     createdAt: new Date(Date.now() - (20 - i) * 3600e3).toISOString(),
   });
-  for (let i = 1; i <= 10; i++) st.outbox.push(mk(i, `短评第 ${i} 条：看完这段我愣了一下。`));
+  for (let i = 1; i <= 10; i++) st2.outbox.push(mk(i, `短评第 ${i} 条：看完这段我愣了一下。`));
   const longRec = mk(0, long);
   longRec.createdAt = new Date().toISOString(); // 时间戳也要是最新（排序看的是它）
-  st.outbox.push(longRec);
-  writeFileSync(`${DIR}/state.json`, JSON.stringify(st));
+  st2.outbox.push(longRec);
+  writeFileSync(`${DIR}/state.json`, JSON.stringify(st2));
 }
 
 const store = new SocialStore(DIR);
@@ -52,7 +64,7 @@ show('① 列表', { limit: 5 }, (d) => ({
 }));
 
 // ② 单条：评论是否全文、草稿是否单独标、心得是否只给最近一篇全文
-show('② BV 号', { video: 'BV1x4Jf6tEWC' }, (d) => ({
+show('② BV 号', { video: TARGET.bvid }, (d) => ({
   verdict: d.verdict,
   said: (d.said as any[]).map((s) => `[${s.statusLabel}/${s.kindLabel}] ${s.text.length}字: ${s.text}`),
   notes: (d.notes as any[]).map((n) => ({ round: n.round, hasFull: !!n.summary, firstLine: n.firstLine })),
@@ -78,7 +90,7 @@ show('④ 不存在', { video: 'BV1xxxxxxxxx' }, (d) => ({
 }));
 
 // ⑥ 长评论折叠 + 条数预算
-show('⑥ 折叠与预算', { video: 'BV1x4Jf6tEWC' }, (d) => ({
+show('⑥ 折叠与预算', { video: TARGET.bvid }, (d) => ({
   saidCount: (d.said as any[]).length,
   saidOmitted: d.saidOmitted,
   longest: (d.said as any[]).reduce((a, b) => (b.text.length > a.text.length ? b : a)),
@@ -86,5 +98,5 @@ show('⑥ 折叠与预算', { video: 'BV1x4Jf6tEWC' }, (d) => ({
 }));
 
 // ⑤ 各种标识
-show('⑤ av 号', { video: 'av117469737916999' }, (d) => (d.video as any)?.bvid);
-show('⑤ 链接', { video: 'https://www.bilibili.com/video/BV1x4Jf6tEWC/' }, (d) => (d.video as any)?.bvid);
+show('⑤ av 号', { video: `av${TARGET.aid}` }, (d) => (d.video as any)?.bvid);
+show('⑤ 链接', { video: `https://www.bilibili.com/video/${TARGET.bvid}/` }, (d) => (d.video as any)?.bvid);

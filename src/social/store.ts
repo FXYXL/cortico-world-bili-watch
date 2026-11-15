@@ -14,6 +14,7 @@ import {
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { RoamSession } from './roaming.ts';
+import type { WatchSession } from './watchLog.ts';
 import type {
   InboxItem,
   SendRecord,
@@ -24,6 +25,11 @@ import type {
 } from '../core/platform.ts';
 
 import type { FocusBinding, FocusWork, FocusCheck, Contact } from './focus.ts';
+/** 闲逛记录保留轮数。 */
+const ROAM_KEEP = 500;
+/** 陪看记录保留场数（一场几百字节，不占地方）。 */
+const WATCH_KEEP = 150;
+
 interface State {
   dynamicOffers?: Record<string, DynamicOffer>;
   dynamicPosts?: DynamicPost[];
@@ -39,6 +45,8 @@ interface State {
   contacts: Contact[];
   version: 1 | 2;
   roaming: RoamSession[];
+  /** 陪看记录（每一场一条，open 时建、关窗/窗口丢失时收尾）。 */
+  watches?: WatchSession[];
   roamCounts?: Record<string, number>;
   videos: PublicVideo[];
   comments: PublicComment[];
@@ -429,6 +437,21 @@ export class SocialStore {
   roams() {
     return structuredClone(this.state.roaming);
   }
+  /** 陪看记录（最近在前）。 */
+  watches() {
+    return structuredClone(this.state.watches ?? []);
+  }
+
+  /** 建/更新一场陪看。id 已存在就覆盖（同一场多次改：播完、换片、收尾）。 */
+  saveWatch(session: WatchSession) {
+    const rows = (this.state.watches ??= []);
+    const i = rows.findIndex((w) => w.id === session.id);
+    if (i < 0) rows.push(structuredClone(session));
+    else rows[i] = structuredClone(session);
+    if (rows.length > WATCH_KEEP) this.state.watches = rows.slice(-WATCH_KEEP);
+    this.save();
+  }
+
   roamCount(day: string, platform: string) {
     return this.state.roamCounts?.[day + '|' + platform];
   }
@@ -443,7 +466,9 @@ export class SocialStore {
     const index = this.state.roaming.findIndex((r) => r.id === session.id);
     if (index < 0) this.state.roaming.push(structuredClone(session));
     else this.state.roaming[index] = structuredClone(session);
-    this.state.roaming = this.state.roaming.slice(-100);
+    // 以前是硬编码 100 轮（每轮约 0.5KB，100 轮才 50KB —— 不是存储压力，是随手写的）。
+    // 500 轮约 250KB，够翻三四个月。
+    this.state.roaming = this.state.roaming.slice(-ROAM_KEEP);
     this.save();
   }
   inbox() {

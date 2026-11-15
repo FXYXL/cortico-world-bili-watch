@@ -1466,6 +1466,96 @@ function mountSettings(ctx) {
   reloadBtn.addEventListener("click", () => void reload());
   void reload();
 }
+async function openImage(ctx, id, caption) {
+  const layer = el("div", null, "bw-lightbox");
+  const box = el("div", null, "bw-lightbox-box");
+  const img = document.createElement("img");
+  img.alt = caption;
+  const note = el("div", caption, "bw-lightbox-note");
+  box.append(img, note);
+  layer.append(box);
+  const close = () => layer.remove();
+  layer.addEventListener("click", close);
+  const onKey = (e) => {
+    if (e.key === "Escape") {
+      close();
+      document.removeEventListener("keydown", onKey);
+    }
+  };
+  document.addEventListener("keydown", onKey);
+  document.body.append(layer);
+  try {
+    const r = await ctx.invoke("gallery-image", [{ id }]);
+    if (r?.dataUrl) img.src = r.dataUrl;
+    else note.textContent = r?.error ?? "\u8FD9\u5F20\u56FE\u6253\u4E0D\u5F00\u4E86";
+  } catch (error) {
+    note.textContent = `\u53D6\u56FE\u5931\u8D25\uFF1A${error.message}`;
+  }
+}
+function galleryBlock(ctx, query) {
+  const box = el("div", null, "bw-gallery");
+  let started = false;
+  const load = () => {
+    if (started) return;
+    started = true;
+    box.append(el("div", "\u8BFB\u53D6\u753B\u96C6\u2026", "bw-muted"));
+    void (async () => {
+      try {
+        const r = await ctx.invoke("gallery", [
+          { ...query, limit: 60 }
+        ]);
+        box.textContent = "";
+        if (!r?.total) {
+          box.append(el("div", "\u8FD9\u4E00\u573A\u6CA1\u7559\u56FE\uFF08\u966A\u770B/\u9605\u8BFB\u65F6\u624D\u4F1A\u6709\uFF09\u3002", "bw-muted"));
+          return;
+        }
+        const grid = el("div", null, "bw-gallery-grid");
+        const io = typeof IntersectionObserver === "function" ? new IntersectionObserver(
+          (entries) => {
+            for (const e of entries) {
+              if (!e.isIntersecting) continue;
+              io?.unobserve(e.target);
+              const cell = e.target;
+              const id = cell.dataset.id ?? "";
+              void ctx.invoke("gallery-image", [{ id }]).then((img) => {
+                if (!img?.dataUrl) return;
+                const im = document.createElement("img");
+                im.src = img.dataUrl;
+                im.alt = cell.dataset.label ?? "";
+                cell.prepend(im);
+              }).catch(() => {
+              });
+            }
+          },
+          { rootMargin: "240px" }
+        ) : null;
+        for (const item of r.items) {
+          const cell = el("button", null, "bw-thumb");
+          cell.dataset.id = item.id;
+          cell.dataset.label = `${item.label} \xB7 ${when(item.at)}`;
+          cell.title = cell.dataset.label;
+          cell.append(el("span", `${item.label}`, "bw-thumb-label"));
+          cell.addEventListener(
+            "click",
+            () => void openImage(ctx, item.id, `${item.label} \xB7 ${when(item.at)}`)
+          );
+          grid.append(cell);
+          io?.observe(cell);
+        }
+        box.append(grid);
+        if (r.total > r.items.length) {
+          box.append(
+            el("div", `\u8FD8\u6709 ${r.total - r.items.length} \u5F20\u6CA1\u5217\u51FA\u6765\uFF08\u4E00\u6B21\u6700\u591A 60 \u5F20\uFF09`, "bw-muted")
+          );
+        }
+      } catch (error) {
+        box.textContent = "";
+        box.append(el("div", `\u753B\u96C6\u8BFB\u53D6\u5931\u8D25\uFF1A${error.message}`, "bw-muted"));
+      }
+    })();
+  };
+  return { box, load };
+}
 function mountRoams(ctx) {
   const root = ctx.root;
   root.classList.add("bw-desk", "bw-roams");
@@ -1520,6 +1610,7 @@ function mountRoams(ctx) {
         tags.append(tag(`\u770B\u4E86 ${item.videos.length} \u4E2A\u89C6\u9891`));
         tags.append(tag(`\u641C\u7D22 ${item.searches} \u6B21`));
         if (item.summary) tags.append(tag("\u6709\u5FC3\u5F97"));
+        if (item.images) tags.append(tag(`\u753B\u96C6 ${item.images} \u5F20`, "roam"));
         main.append(tags);
         const side = el("div", null, "bw-card-side");
         side.append(el("span", "\u70B9\u5F00\u770B\u660E\u7EC6", "bw-open-label"));
@@ -1550,6 +1641,132 @@ function mountRoams(ctx) {
           row.append(line);
           body.append(row);
         }
+        if (item.images) {
+          const g = galleryBlock(ctx, { roamId: item.id });
+          const toggle = el("button", `\u770B\u8FD9\u4E00\u8F6E\u7684\u753B\u96C6\uFF08${item.images} \u5F20\uFF09`, "bw-gallery-toggle");
+          toggle.addEventListener("click", () => {
+            const open = g.box.classList.toggle("is-open");
+            toggle.textContent = open ? `\u6536\u8D77\u753B\u96C6\uFF08${item.images} \u5F20\uFF09` : `\u770B\u8FD9\u4E00\u8F6E\u7684\u753B\u96C6\uFF08${item.images} \u5F20\uFF09`;
+            if (open) g.load();
+          });
+          body.append(toggle, g.box);
+        }
+        card.append(body);
+        list.append(card);
+      }
+    } catch (error) {
+      list.textContent = "";
+      list.append(el("div", `\u8BFB\u53D6\u5931\u8D25\uFF1A${error.message}`, "bw-empty"));
+    }
+  }
+  prev.addEventListener("click", () => {
+    if (page > 1) {
+      page -= 1;
+      void load();
+    }
+  });
+  next.addEventListener("click", () => {
+    if (page * pageSize < total) {
+      page += 1;
+      void load();
+    }
+  });
+  void load();
+  ctx.interval(() => void load(), 6e4);
+}
+function mountWatches(ctx) {
+  const root = ctx.root;
+  root.classList.add("bw-desk", "bw-watches");
+  root.append(
+    el(
+      "p",
+      "\u6BCF\u4E00\u573A\u4E00\u8D77\u770B\uFF1A\u770B\u7684\u54EA\u6761\u3001\u770B\u4E86\u591A\u4E45\u3001\u7559\u4E86\u54EA\u4E9B\u753B\u9762\u3001\u5979\u81EA\u5DF1\u5199\u7684\u4E00\u53E5\u8BDD\u3002\u6700\u8FD1\u5728\u524D\u3002",
+      "bw-summary"
+    )
+  );
+  const info = el("p", "", "bw-summary");
+  const list = el("div", null, "bw-list");
+  const pager = el("div", null, "bw-pager");
+  const prev = el("button", "\u4E0A\u4E00\u9875");
+  const next = el("button", "\u4E0B\u4E00\u9875");
+  const pageLabel = el("span", "", "bw-muted");
+  pager.append(prev, pageLabel, next);
+  root.append(info, list, pager);
+  const lenText = (sec) => {
+    const s = Math.max(0, Math.round(Number(sec) || 0));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+  const endText = (end) => end === "gone" ? "\u7A97\u53E3\u81EA\u5DF1\u5173\u4E86" : end === "switch" ? "\u6362\u7247\u4E86" : end === "exit" ? "\u6B63\u5E38\u5173\u7A97" : "\u8FD8\u5F00\u7740";
+  let page = 1;
+  let total = 0;
+  const pageSize = 20;
+  async function load() {
+    try {
+      const r = await ctx.invoke("watches", [
+        { page, pageSize }
+      ]);
+      total = r.total;
+      const pages = Math.max(1, Math.ceil(total / pageSize));
+      page = Math.min(page, pages);
+      info.textContent = `\u5171 ${total} \u573A \xB7 \u6BCF\u9875 ${pageSize} \u6761`;
+      pageLabel.textContent = `${page} / ${pages}`;
+      prev.disabled = page <= 1;
+      next.disabled = page >= pages;
+      list.textContent = "";
+      if (!r.items.length) {
+        list.append(
+          el("div", "\u8FD8\u6CA1\u6709\u966A\u770B\u8BB0\u5F55\u3002\u4E3B\u4EBA\u8BF4\u300C\u966A\u6211\u770Bxxx\u300D\u4E4B\u540E\uFF0C\u6BCF\u4E00\u573A\u90FD\u4F1A\u8BB0\u5728\u8FD9\u91CC\u3002", "bw-empty")
+        );
+        return;
+      }
+      for (const item of r.items) {
+        const card = el("details", null, "bw-card");
+        const sum = el("summary");
+        const main = el("div", null, "bw-card-main");
+        main.append(el("h4", `\u300A${short(item.title, 60)}\u300B \xB7 ${when(item.startedAt)}`));
+        const tags = el("div", null, "bw-tags");
+        tags.append(tag(item.duration > 0 ? `${lenText(item.duration)} \u7684\u7247\u5B50` : "\u65F6\u957F\u672A\u77E5"));
+        tags.append(tag(`${item.frames} \u5E27`));
+        tags.append(tag(endText(item.end)));
+        if (item.summary) tags.append(tag("\u6709\u603B\u7ED3", "sent"));
+        else tags.append(tag("\u6CA1\u5199\u603B\u7ED3"));
+        if (item.images) tags.append(tag(`\u753B\u96C6 ${item.images} \u5F20`, "roam"));
+        main.append(tags);
+        const side = el("div", null, "bw-card-side");
+        side.append(el("span", "\u70B9\u5F00\u770B\u660E\u7EC6", "bw-open-label"));
+        sum.append(main, side);
+        card.append(sum);
+        const body = el("div", null, "bw-thread");
+        if (item.bvid) {
+          const a = el("a", `\u6253\u5F00\u8FD9\u6761\u89C6\u9891\uFF08${item.bvid}\uFF09`);
+          a.href = `https://www.bilibili.com/video/${item.bvid}/`;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          body.append(a);
+        }
+        if (item.summary) {
+          const row = el("div", null, "bw-event");
+          row.append(el("div", "\u5979\u7684\u603B\u7ED3", "bw-speaker"), el("div", item.summary, "bw-body"));
+          body.append(row);
+        } else {
+          body.append(
+            el(
+              "div",
+              item.end === "open" ? "\u8FD9\u4E00\u573A\u8FD8\u5F00\u7740\uFF0C\u5173\u7A97\u65F6\u5979\u4F1A\u5199\u4E00\u53E5\uFF08\u53EF\u9009\uFF09\u3002" : "\u8FD9\u4E00\u573A\u6CA1\u5199\u603B\u7ED3\uFF08\u5173\u7A97\u65F6\u662F\u53EF\u9009\u7684\uFF09\u3002\u753B\u9762\u90FD\u7559\u7740\uFF0C\u5728\u4E0B\u9762\u7684\u753B\u96C6\u91CC\u3002",
+              "bw-muted"
+            )
+          );
+        }
+        if (item.images) {
+          const g = galleryBlock(ctx, { watchId: item.id });
+          const toggle = el("button", `\u770B\u8FD9\u4E00\u573A\u7684\u753B\u96C6\uFF08${item.images} \u5F20\uFF09`, "bw-gallery-toggle");
+          toggle.addEventListener("click", () => {
+            const open = g.box.classList.toggle("is-open");
+            toggle.textContent = open ? `\u6536\u8D77\u753B\u96C6\uFF08${item.images} \u5F20\uFF09` : `\u770B\u8FD9\u4E00\u573A\u7684\u753B\u96C6\uFF08${item.images} \u5F20\uFF09`;
+            if (open) g.load();
+          });
+          body.append(toggle, g.box);
+        }
         card.append(body);
         list.append(card);
       }
@@ -1577,12 +1794,14 @@ var client_default = {
   panels: {
     desk: { mount: mountDesk },
     settings: { mount: mountSettings },
-    roams: { mount: mountRoams }
+    roams: { mount: mountRoams },
+    watches: { mount: mountWatches }
   }
 };
 export {
   client_default as default,
   mountDesk,
   mountRoams,
-  mountSettings
+  mountSettings,
+  mountWatches
 };
