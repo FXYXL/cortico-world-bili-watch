@@ -285,6 +285,13 @@ export interface BiliWatchConfig {
     maxWatchMinutes: number;
     /** 连续多少分钟没有主人说话就自动暂停播放（窗口不关）。0 = 不自动停。 */
     idlePauseMinutes: number;
+    /**
+     * 站点只给 AI 字幕（或没字幕轨）时，每帧额外附一条「字幕带」长图。
+     *
+     * 硬字幕是作者打的、准；AI 轨会把粤语歌转成「欢迎翻到千里年」。关掉就只看
+     * 480 宽的小格子（字还在，但会掉笔画），换回来的是每帧省约 900 token。
+     */
+    subtitleBand: boolean;
   };
 
   /** 媒体与额度 */
@@ -418,6 +425,7 @@ export const BILI_WATCH_DEFAULTS: BiliWatchConfig = {
     cellHeight: 270,
     maxWatchMinutes: 120,
     idlePauseMinutes: 10,
+    subtitleBand: true,
   },
 
   media: {

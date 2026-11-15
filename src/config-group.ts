@@ -537,6 +537,14 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
         maximum: 480,
         description: '超过后自动暂停观察（窗口不关），防无人值守烧 token。0 = 不限。',
       },
+      'worlds.bili-watch.watch.subtitleBand': {
+        type: 'boolean',
+        title: '附加「字幕带」长图',
+        description:
+          '站点只给 AI 字幕（或干脆没字幕轨）时，每帧多附一条把画面底部字裁出来、放大的长图 —— ' +
+          '硬字幕是作者打的，比 AI 转写准得多。代价是每帧约 +900 token；' +
+          '人工字幕的片子不受影响，一分不花。',
+      },
       'worlds.bili-watch.watch.idlePauseMinutes': {
         type: 'integer',
         title: '主人没动静就自动暂停（分钟）',

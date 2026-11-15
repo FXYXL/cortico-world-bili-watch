@@ -98,6 +98,23 @@ export function meanAbsDiff(a: ArrayLike<number>, b: ArrayLike<number>): number 
  * sorted by time; the last one is the newest. Returns at least the newest when `frames` is
  * non-empty.
  */
+/**
+ * 从列表里**按时间均匀取最多 max 个**（不够就全给）。
+ *
+ * 用途：字幕带最多拼 4 条 —— 9 条竖着拼是 1280×1296，约 2200 token，比整张拼图还贵。
+ * 均匀取比"取前 4 条"好：后者在镜头切换密集时只能看到开头。
+ */
+export function pickSpaced<T>(list: readonly T[], max: number): T[] {
+  const n = Math.max(1, Math.round(Number(max) || 1));
+  if (list.length <= n) return [...list];
+  if (n === 1) return [list[list.length - 1]];
+  // **首尾都要**：结尾那句台词常常正是梗（实测「你醒啦?欢迎回到千禧年的广东」
+  // 就在最后一屏）。按 (i*(len-1))/(n-1) 取，保证第 0 个和第 len-1 个都在里面。
+  return Array.from({ length: n }, (_, i) =>
+    list[Math.round((i * (list.length - 1)) / (n - 1))],
+  );
+}
+
 export function selectFrames(frames: readonly FrameMeta[], gapSec: number, opts: SelectOptions): number[] {
   if (frames.length === 0) return [];
   const last = frames.length - 1;

@@ -17,6 +17,7 @@
 import { DanmakuPool, spread, subtitlesBetween, type SubtitleLine } from '../core/danmaku.ts';
 import {
   cellSpans,
+  pickSpaced,
   describeEvents,
   dhash,
   gridFor,
@@ -92,6 +93,8 @@ export interface CoWatchOptions {
 
 interface SampleExt extends FrameMeta {
   jpeg: string;
+  /** 底部字幕带（1280 宽 jpeg base64），只在需要时采。 */
+  band?: string;
   gray: number[];
   w: number;
   h: number;
@@ -430,7 +433,16 @@ export class CoWatch {
 
   private async captureOnce(): Promise<void> {
     await this.checkPlaybackEdge();
-    const s = await this.browser.sample(this.cfg().cellWidth, this.cfg().cellHeight, this.cfg().jpegQuality);
+    // 站点只给 AI 字幕、或者压根没字幕轨时才顺带抽字幕带：
+    // 人工字幕已经够准，没必要每帧多花几百 token。
+    const wantBand =
+      this.cfg().subtitleBand !== false && (this.subtitleAuto || this.subtitle.length === 0);
+    const s = await this.browser.sample(
+      this.cfg().cellWidth,
+      this.cfg().cellHeight,
+      this.cfg().jpegQuality,
+      wantBand,
+    );
     if (!s || !s.gray?.length) {
       // 采样失败是「观察帧永远不来」的头号嫌疑：连续失败打一次日志，别静默
       this.sampleFails += 1;
@@ -695,6 +707,27 @@ export class CoWatch {
       const entered = v.chapters.filter((c) => c.from > t0 && c.from <= t1);
       if (entered.length) lines.push(`进入章节：${entered.map((c) => `${clock(c.from)}「${c.title}」`).join('、')}`);
     }
+    // 字幕带：把这几格底部的字竖着拼成一条（1280 宽 × N 条），单独作为第二张图。
+    const allBands = chosen.map((c) => c.band).filter((b): b is string => Boolean(b));
+    // **最多 4 条**：9 条竖着拼是 1280×1296，约 2200 token，比整张拼图还贵。
+    // 多的时候按时间均匀取 4 条 —— 字幕是给人读的，4 个点足够看出"这一段在说什么"。
+    const bands = pickSpaced(allBands, 4);
+    let bandStrip: string | null = null;
+    if (bands.length) {
+      const bandW = 1280;
+      // 用页面回报的真实高度：不同画幅（竖屏/方屏）比例不一样，写死 144 会把带子拉变形
+      const bandH = chosen.find((c) => c.band)?.bandH || 144;
+      bandStrip = await this.browser
+        .montage(bands, 1, bands.length, bandW, bandH, 0.86)
+        .catch(() => null);
+      if (bandStrip) {
+        lines.push(
+          `另附**字幕带**：把上面 ${bands.length} 格画面底部的字裁出来、放大后竖着拼（自上而下 = 第 1、2… 格）。` +
+            '硬字幕是作者打的，**引用台词以这条带子为准**；和上面那行 AI 识别文本打架时，信带子。',
+        );
+      }
+    }
+
     const cells = cellSpans(chosen.map((c) => c.t), t0).map((span) => ({
       ...span,
       subtitles: subtitlesBetween(this.subtitle, span.from, span.to)
@@ -737,6 +770,18 @@ export class CoWatch {
           name: `${mode === 'ending' ? 'end' : 'scene'}-${sceneIndex}.jpg`,
           fallbackText: `画面拼图 ${chosen.length} 格`,
         },
+        // 字幕带**不进画集**（单看没意义，条数还会翻倍）——名字不是 scene-/end-，
+        // world 的画集钩子会跳过它。
+        ...(bandStrip
+          ? [
+              {
+                bytes: Buffer.from(bandStrip, 'base64'),
+                mime: 'image/jpeg',
+                name: `subs-${sceneIndex}.jpg`,
+                fallbackText: `字幕带 ${bands.length} 条`,
+              },
+            ]
+          : []),
       ],
     };
   }
