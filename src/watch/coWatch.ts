@@ -17,7 +17,6 @@
 import { DanmakuPool, spread, subtitlesBetween, type SubtitleLine } from '../core/danmaku.ts';
 import {
   cellSpans,
-  pickTextBands,
   describeEvents,
   dhash,
   gridFor,
@@ -93,8 +92,6 @@ export interface CoWatchOptions {
 
 interface SampleExt extends FrameMeta {
   jpeg: string;
-  /** 底部字幕带（1280 宽 jpeg base64），只在需要时采。 */
-  band?: string;
   gray: number[];
   w: number;
   h: number;
@@ -433,16 +430,7 @@ export class CoWatch {
 
   private async captureOnce(): Promise<void> {
     await this.checkPlaybackEdge();
-    // 站点只给 AI 字幕、或者压根没字幕轨时才顺带抽字幕带：
-    // 人工字幕已经够准，没必要每帧多花几百 token。
-    const wantBand =
-      this.cfg().subtitleBand !== false && (this.subtitleAuto || this.subtitle.length === 0);
-    const s = await this.browser.sample(
-      this.cfg().cellWidth,
-      this.cfg().cellHeight,
-      this.cfg().jpegQuality,
-      wantBand,
-    );
+    const s = await this.browser.sample(this.cfg().cellWidth, this.cfg().cellHeight, this.cfg().jpegQuality);
     if (!s || !s.gray?.length) {
       // 采样失败是「观察帧永远不来」的头号嫌疑：连续失败打一次日志，别静默
       this.sampleFails += 1;
@@ -707,35 +695,6 @@ export class CoWatch {
       const entered = v.chapters.filter((c) => c.from > t0 && c.from <= t1);
       if (entered.length) lines.push(`进入章节：${entered.map((c) => `${clock(c.from)}「${c.title}」`).join('、')}`);
     }
-    // 字幕带：把这几格底部的字竖着拼成一条（1280 宽 × N 条），单独作为第二张图。
-    // 字幕带从**整个窗口的所有采样点**里挑，不是从拼图那几格：
-    // 采样是每秒一个（20 秒窗口 ≈ 20 个点），而拼图只有 4–9 格 —— 一句字幕只出现
-    // 1–5 秒，正好落在拼图那几格纯靠运气。这一步按"带子里像不像有字"排序，
-    // 命中率就跟着采样点数走，而不是跟着格子数走。
-    const bandPick = pickTextBands(pool, 4);
-    const bands = bandPick.picked
-      .map((s) => s.band)
-      .filter((b): b is string => Boolean(b));
-    let bandStrip: string | null = null;
-    if (bands.length) {
-      const bandW = 1280;
-      // 用页面回报的真实高度：不同画幅（竖屏/方屏）比例不一样，写死 144 会把带子拉变形
-      const bandH = bandPick.picked.find((s) => s.bandH)?.bandH || 144;
-      bandStrip = await this.browser
-        .montage(bands, 1, bands.length, bandW, bandH, 0.86)
-        .catch(() => null);
-      if (bandStrip) {
-        lines.push(
-          bandPick.fallback
-            ? `另附**字幕带**：这 ${pool.length} 个采样点里**没检测到成行的字**` +
-              '（这段可能真没字幕，或者字幕是竖排/花字/贴在画面中间）。带子照发，看不到字就别引用。'
-            : `另附**字幕带**：从这一段 ${pool.length} 个采样点里挑出字最明显的 ${bands.length} 条，` +
-              '把画面底部的字裁出来、放大后竖着拼（自上而下 = 时间顺序）。' +
-              '硬字幕是作者打的，**引用台词以这条带子为准**；和上面那行 AI 识别文本打架时，信带子。',
-        );
-      }
-    }
-
     const cells = cellSpans(chosen.map((c) => c.t), t0).map((span) => ({
       ...span,
       subtitles: subtitlesBetween(this.subtitle, span.from, span.to)
@@ -778,18 +737,6 @@ export class CoWatch {
           name: `${mode === 'ending' ? 'end' : 'scene'}-${sceneIndex}.jpg`,
           fallbackText: `画面拼图 ${chosen.length} 格`,
         },
-        // 字幕带**不进画集**（单看没意义，条数还会翻倍）——名字不是 scene-/end-，
-        // world 的画集钩子会跳过它。
-        ...(bandStrip
-          ? [
-              {
-                bytes: Buffer.from(bandStrip, 'base64'),
-                mime: 'image/jpeg',
-                name: `subs-${sceneIndex}.jpg`,
-                fallbackText: `字幕带 ${bands.length} 条`,
-              },
-            ]
-          : []),
       ],
     };
   }

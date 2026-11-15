@@ -57,12 +57,6 @@ export interface WatchBrowserOptions {
 }
 
 export interface Sample {
-  /** 底部字幕带（jpeg base64，1280 宽）；要 `wantBand` 才采。 */
-  band?: string;
-  /** 字幕带高度（拼图按它算格子，别用估算值把带子拉变形）。 */
-  bandH?: number;
-  /** 这条带子里"像有字"的程度（0–1，笔画边缘占比），用来挑帧。 */
-  bandEdge?: number;
   t: number;
   /** cell JPEG，base64。 */
   jpeg: string;
@@ -129,7 +123,7 @@ async function waitForDevtools(url: string, timeoutMs: number, dead: () => boole
  * 页面脚本是字符串：TS 编译会把函数包上页面没有的辅助物。
  * 裁剪状态存在 `window.__bvCrop`，让 look 共享采样器的决定。
  */
-const SAMPLE_FRAME = `(cellLong, cellShort, q, wantBand) => {
+const SAMPLE_FRAME = `(cellLong, cellShort, q) => {
   const v = document.querySelector('video');
   if (!v || v.readyState < 2 || !v.videoWidth) return null;
   const W = v.videoWidth, H = v.videoHeight;
@@ -178,41 +172,7 @@ const SAMPLE_FRAME = `(cellLong, cellShort, q, wantBand) => {
   const gd = gx.getImageData(0, 0, 64, 36).data;
   const gray = [];
   for (let i = 0; i < gd.length; i += 4) gray.push((gd[i] * 299 + gd[i + 1] * 587 + gd[i + 2] * 114) / 1000);
-  // 字幕带：把画面**底部 20%** 按 1280 宽重画一遍（相当于 2 倍放大）。
-  // 为什么要单独一条：格子里那版是 480 宽，字虽然能认但会掉笔画；而硬字幕是
-  // 唯一的准确文本（站点 AI 轨会把粤语歌转成「欢迎翻到千里年」）。宽度固定 1280
-  // 是为了让竖着拼成一条长图时高度可预测 —— 4 条 ≈ 1280×560，约 830 token。
-  let band = '', bandEdge = 0;
-  if (wantBand) {
-    const bh = Math.max(8, Math.round(crop.h * 0.2));
-    const by = crop.y + crop.h - bh;
-    const bw = 1280;
-    const bhh = Math.min(240, Math.max(24, Math.round((bw * bh) / Math.max(1, crop.w))));
-    const bc = window.__bvBand || (window.__bvBand = document.createElement('canvas'));
-    if (bc.width !== bw || bc.height !== bhh) { bc.width = bw; bc.height = bhh; }
-    const bx = bc.getContext('2d');
-    bx.imageSmoothingEnabled = true;
-    bx.imageSmoothingQuality = 'high';
-    bx.drawImage(v, crop.x, by, crop.w, bh, 0, 0, bw, bhh);
-    band = (bc.toDataURL('image/jpeg', 0.86).split(',')[1]) || '';
-    // **像不像有字**：缩到 160×20 灰度，数"相邻像素亮度跳变"的占比。
-    // 一行字幕会造出大量笔画边缘；纯背景渐变几乎没有。
-    // 这一步是为了解决"采样点没落在字幕出现的那几秒"——不是去猜字，而是**挑出
-    // 带子里真有东西的那几帧**，别把 4 条空画面发过去。
-    const sc = window.__bvBandScore || (window.__bvBandScore = document.createElement('canvas'));
-    if (sc.width !== 160 || sc.height !== 20) { sc.width = 160; sc.height = 20; }
-    const sx = sc.getContext('2d', { willReadFrequently: true });
-    sx.drawImage(v, crop.x, by, crop.w, bh, 0, 0, 160, 20);
-    const sd = sx.getImageData(0, 0, 160, 20).data;
-    let strong = 0, total = 0, prevL = -1;
-    for (let i = 0; i < sd.length; i += 4) {
-      const l = (sd[i] * 299 + sd[i + 1] * 587 + sd[i + 2] * 114) / 1000;
-      if (prevL >= 0 && Math.abs(l - prevL) > 28) strong++;
-      prevL = l; total++;
-    }
-    bandEdge = total ? strong / total : 0;
-  }
-  return { t: v.currentTime, jpeg, gray, w, h, crop, band, bandH: wantBand ? bhh : 0, bandEdge };
+  return { t: v.currentTime, jpeg, gray, w, h, crop };
 }`;
 
 const LOOK_FRAME = `(mw, mh, q, r) => {
@@ -572,13 +532,7 @@ export class WatchBrowser {
     return this.lastSampleError;
   }
 
-  async sample(
-    cellLong: number,
-    cellShort: number,
-    quality: number,
-    /** 要不要顺带抽一条底部字幕带（站点只给 AI 字幕/压根没轨时才需要）。 */
-    wantBand = false,
-  ): Promise<Sample | null> {
+  async sample(cellLong: number, cellShort: number, quality: number): Promise<Sample | null> {
     const page = this.page;
     if (!page || page.isClosed()) {
       this.lastSampleError = '页面已关闭';
@@ -593,7 +547,7 @@ export class WatchBrowser {
       if (v.readyState < 2) return { err: '视频还没就绪（readyState=' + v.readyState + '）' };
       if (!v.videoWidth) return { err: '视频尺寸为 0（可能还没解码出画面）' };
       try {
-        const out = (${SAMPLE_FRAME})(${cellLong}, ${cellShort}, ${quality}, ${wantBand ? 'true' : 'false'});
+        const out = (${SAMPLE_FRAME})(${cellLong}, ${cellShort}, ${quality});
         return out ? { ok: out } : { err: '抽帧返回空' };
       } catch (e) {
         return { err: '抽帧被拒：' + (e && e.name ? e.name + ' ' : '') + (e && e.message ? e.message : e) };

@@ -77,8 +77,7 @@ export function formatBiliProbe(f: ProbeFacts): string {
     );
     lines.push(
       'subtitles_hint: if the video has **burned-in** subtitles (text baked into the picture), read those from the ' +
-        'frames instead — they are the author\'s own words and stay legible at cell size. Trust the picture over these lines. ' +
-        'For a clean read, `video_subtitles({ video, from, to, band })` crops that bottom band at full resolution into one long image.',
+        'frames instead — they are the author's own words and stay legible at cell size. Trust the picture over these lines.',
     );
   }
 

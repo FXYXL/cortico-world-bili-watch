@@ -213,15 +213,13 @@ export class BiliWatchWorld implements World {
       deliver: (rendered) => {
         // 画集：观察帧留一份，面板里能翻（宿主的 media 目录不保存 pushEvent 的图）
         try {
-          // 只收"她看到的画面拼图"：字幕带（subs-*）单看没意义，进画集只会让条目翻倍
-          const frames = (rendered.blobs ?? []).filter((b) => /^(scene|end)-/.test(String(b.name ?? '')));
-          if (frames.length) {
+          if (rendered.blobs?.length) {
             const w = this.currentWatch;
             const at =
               rendered.frameAt !== undefined
                 ? `${rendered.mode === 'ending' ? '结尾' : '观察帧'} ${clock(rendered.frameAt)}`
                 : undefined;
-            this.gallery.record(frames, {
+            this.gallery.record(rendered.blobs, {
               kind: 'watch',
               ...(w ? { watchId: w.id } : {}),
               ...(w?.bvid ? { bvid: w.bvid } : {}),
