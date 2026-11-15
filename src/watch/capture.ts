@@ -104,6 +104,32 @@ export function meanAbsDiff(a: ArrayLike<number>, b: ArrayLike<number>): number 
  * 用途：字幕带最多拼 4 条 —— 9 条竖着拼是 1280×1296，约 2200 token，比整张拼图还贵。
  * 均匀取比"取前 4 条"好：后者在镜头切换密集时只能看到开头。
  */
+/**
+ * 从**整个窗口的所有采样点**里挑出最像"有字"的几条字幕带。
+ *
+ * 为什么不能只看拼图里那几格：拼图是 4–9 个点，而采样是每秒一个（20 秒窗口 ≈ 20 个点）。
+ * 一句字幕通常只出现 1–5 秒，**正好落在拼图那几格**纯靠运气。所以从全池子里挑。
+ *
+ * 返回按**时间顺序**排好（竖拼自上而下就是时间顺序），并说明是不是"没挑到像字的、
+ * 只能退而求其次"。
+ */
+export function pickTextBands<T extends { band?: string; bandEdge?: number }>(
+  list: readonly T[],
+  max: number,
+  minEdge = 0.12,
+): { picked: T[]; fallback: boolean } {
+  const withBand = list.filter((x) => Boolean(x.band));
+  if (!withBand.length) return { picked: [], fallback: false };
+  const order = new Map<T, number>(withBand.map((x, i) => [x, i]));
+  const ranked = [...withBand].sort((a, b) => (b.bandEdge ?? 0) - (a.bandEdge ?? 0));
+  const good = ranked.filter((x) => (x.bandEdge ?? 0) >= minEdge);
+  // 一条像字的都没有：只发 2 条最高的，并在文案里说"没检测到成行的字"，
+  // 别把 4 条空画面当字幕发过去（那才是真的浪费 token）。
+  const take = (good.length ? good : ranked.slice(0, 2)).slice(0, Math.max(1, max));
+  const picked = take.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+  return { picked, fallback: good.length === 0 };
+}
+
 export function pickSpaced<T>(list: readonly T[], max: number): T[] {
   const n = Math.max(1, Math.round(Number(max) || 1));
   if (list.length <= n) return [...list];

@@ -61,6 +61,8 @@ export interface Sample {
   band?: string;
   /** 字幕带高度（拼图按它算格子，别用估算值把带子拉变形）。 */
   bandH?: number;
+  /** 这条带子里"像有字"的程度（0–1，笔画边缘占比），用来挑帧。 */
+  bandEdge?: number;
   t: number;
   /** cell JPEG，base64。 */
   jpeg: string;
@@ -180,7 +182,7 @@ const SAMPLE_FRAME = `(cellLong, cellShort, q, wantBand) => {
   // 为什么要单独一条：格子里那版是 480 宽，字虽然能认但会掉笔画；而硬字幕是
   // 唯一的准确文本（站点 AI 轨会把粤语歌转成「欢迎翻到千里年」）。宽度固定 1280
   // 是为了让竖着拼成一条长图时高度可预测 —— 4 条 ≈ 1280×560，约 830 token。
-  let band = '';
+  let band = '', bandEdge = 0;
   if (wantBand) {
     const bh = Math.max(8, Math.round(crop.h * 0.2));
     const by = crop.y + crop.h - bh;
@@ -193,8 +195,24 @@ const SAMPLE_FRAME = `(cellLong, cellShort, q, wantBand) => {
     bx.imageSmoothingQuality = 'high';
     bx.drawImage(v, crop.x, by, crop.w, bh, 0, 0, bw, bhh);
     band = (bc.toDataURL('image/jpeg', 0.86).split(',')[1]) || '';
+    // **像不像有字**：缩到 160×20 灰度，数"相邻像素亮度跳变"的占比。
+    // 一行字幕会造出大量笔画边缘；纯背景渐变几乎没有。
+    // 这一步是为了解决"采样点没落在字幕出现的那几秒"——不是去猜字，而是**挑出
+    // 带子里真有东西的那几帧**，别把 4 条空画面发过去。
+    const sc = window.__bvBandScore || (window.__bvBandScore = document.createElement('canvas'));
+    if (sc.width !== 160 || sc.height !== 20) { sc.width = 160; sc.height = 20; }
+    const sx = sc.getContext('2d', { willReadFrequently: true });
+    sx.drawImage(v, crop.x, by, crop.w, bh, 0, 0, 160, 20);
+    const sd = sx.getImageData(0, 0, 160, 20).data;
+    let strong = 0, total = 0, prevL = -1;
+    for (let i = 0; i < sd.length; i += 4) {
+      const l = (sd[i] * 299 + sd[i + 1] * 587 + sd[i + 2] * 114) / 1000;
+      if (prevL >= 0 && Math.abs(l - prevL) > 28) strong++;
+      prevL = l; total++;
+    }
+    bandEdge = total ? strong / total : 0;
   }
-  return { t: v.currentTime, jpeg, gray, w, h, crop, band, bandH: wantBand ? bhh : 0 };
+  return { t: v.currentTime, jpeg, gray, w, h, crop, band, bandH: wantBand ? bhh : 0, bandEdge };
 }`;
 
 const LOOK_FRAME = `(mw, mh, q, r) => {

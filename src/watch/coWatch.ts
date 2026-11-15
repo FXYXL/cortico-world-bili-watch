@@ -17,7 +17,7 @@
 import { DanmakuPool, spread, subtitlesBetween, type SubtitleLine } from '../core/danmaku.ts';
 import {
   cellSpans,
-  pickSpaced,
+  pickTextBands,
   describeEvents,
   dhash,
   gridFor,
@@ -708,22 +708,30 @@ export class CoWatch {
       if (entered.length) lines.push(`进入章节：${entered.map((c) => `${clock(c.from)}「${c.title}」`).join('、')}`);
     }
     // 字幕带：把这几格底部的字竖着拼成一条（1280 宽 × N 条），单独作为第二张图。
-    const allBands = chosen.map((c) => c.band).filter((b): b is string => Boolean(b));
-    // **最多 4 条**：9 条竖着拼是 1280×1296，约 2200 token，比整张拼图还贵。
-    // 多的时候按时间均匀取 4 条 —— 字幕是给人读的，4 个点足够看出"这一段在说什么"。
-    const bands = pickSpaced(allBands, 4);
+    // 字幕带从**整个窗口的所有采样点**里挑，不是从拼图那几格：
+    // 采样是每秒一个（20 秒窗口 ≈ 20 个点），而拼图只有 4–9 格 —— 一句字幕只出现
+    // 1–5 秒，正好落在拼图那几格纯靠运气。这一步按"带子里像不像有字"排序，
+    // 命中率就跟着采样点数走，而不是跟着格子数走。
+    const bandPick = pickTextBands(pool, 4);
+    const bands = bandPick.picked
+      .map((s) => s.band)
+      .filter((b): b is string => Boolean(b));
     let bandStrip: string | null = null;
     if (bands.length) {
       const bandW = 1280;
       // 用页面回报的真实高度：不同画幅（竖屏/方屏）比例不一样，写死 144 会把带子拉变形
-      const bandH = chosen.find((c) => c.band)?.bandH || 144;
+      const bandH = bandPick.picked.find((s) => s.bandH)?.bandH || 144;
       bandStrip = await this.browser
         .montage(bands, 1, bands.length, bandW, bandH, 0.86)
         .catch(() => null);
       if (bandStrip) {
         lines.push(
-          `另附**字幕带**：把上面 ${bands.length} 格画面底部的字裁出来、放大后竖着拼（自上而下 = 第 1、2… 格）。` +
-            '硬字幕是作者打的，**引用台词以这条带子为准**；和上面那行 AI 识别文本打架时，信带子。',
+          bandPick.fallback
+            ? `另附**字幕带**：这 ${pool.length} 个采样点里**没检测到成行的字**` +
+              '（这段可能真没字幕，或者字幕是竖排/花字/贴在画面中间）。带子照发，看不到字就别引用。'
+            : `另附**字幕带**：从这一段 ${pool.length} 个采样点里挑出字最明显的 ${bands.length} 条，` +
+              '把画面底部的字裁出来、放大后竖着拼（自上而下 = 时间顺序）。' +
+              '硬字幕是作者打的，**引用台词以这条带子为准**；和上面那行 AI 识别文本打架时，信带子。',
         );
       }
     }
