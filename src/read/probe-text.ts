@@ -75,6 +75,10 @@ export function formatBiliProbe(f: ProbeFacts): string {
         'Fine for guessing the topic; **do not quote it as the actual words** — dialect, singing and technical ' +
         'terms come out badly garbled. If the wording matters, say so instead of trusting these lines.',
     );
+    lines.push(
+      'subtitles_hint: if the video has **burned-in** subtitles (text baked into the picture), read those from the ' +
+        'frames instead — they are the author's own words and stay legible at cell size. Trust the picture over these lines.',
+    );
   }
 
   // **该不该指望台词**：放在读法建议之前，因为它直接决定"要不要等语音识别"。

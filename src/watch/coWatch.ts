@@ -707,7 +707,9 @@ export class CoWatch {
       // 必须说清：不标的话模型会把粤语歌的机器转写当原话引用，主人一眼看出在瞎编
       lines.push(
         '字幕来源：**B站自动识别（AI）**，不是 UP 写的。方言/歌曲/专业词常大幅失真 —— ' +
-          '只当猜主题用，别当台词原话引用；要引用就说"字幕识别得不太准"。',
+          '只当猜主题用，别当台词原话引用。\n' +
+          '**画面里本来就有硬字幕时，以画面里那几个字为准**（那是作者打的，准）；' +
+          '两者打架时信画面，不要信这一行文本。',
       );
     }
     const board = renderStoryboard(cells, { fmt: clock, subtitleData: this.subtitle.length > 0 });
