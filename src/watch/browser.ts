@@ -21,6 +21,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chromium, type Browser, type CDPSession, type Page } from 'playwright-core';
 
 import { decodeDanmakuSegment, parseSubtitle, type Danmaku, type SubtitleLine } from '../core/danmaku.ts';
+import { isAutoSubtitle, pickSubtitleTrack } from '../core/subtitle-pick.ts';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
@@ -50,7 +51,7 @@ export interface WatchBrowserOptions {
   windowHeight: number;
   cookie: () => string;
   onDanmaku: (list: readonly Danmaku[]) => void;
-  onSubtitle: (lines: readonly SubtitleLine[]) => void;
+  onSubtitle: (lines: readonly SubtitleLine[], meta: { auto: boolean }) => void;
   onLost: () => void;
   log?: (msg: string) => void;
 }
@@ -380,21 +381,27 @@ export class WatchBrowser {
         if (list.length) this.o.onDanmaku(list);
       } else if (/\/x\/player\/(wbi\/)?v2\?/.test(url) && base64) {
         const json = JSON.parse(Buffer.from(body, 'base64').toString('utf8'));
-        const url2 = json?.data?.subtitle?.subtitles?.[0]?.subtitle_url;
-        if (typeof url2 === 'string' && url2) void this.loadSubtitle(url2);
+        const tracks: any[] = json?.data?.subtitle?.subtitles ?? [];
+        // **不能取 [0]**：AI 轨常排在前面，取第一条等于优先用机器转写。
+        // 顺序只有一处定义（core/subtitle-pick.ts），和 getSubtitles 共用。
+        const pick = pickSubtitleTrack(tracks);
+        const url2 = pick?.subtitle_url;
+        if (typeof url2 === 'string' && url2) {
+          void this.loadSubtitle(url2, isAutoSubtitle(pick));
+        }
       }
     } catch {
       /* 拦截是锦上添花 */
     }
   }
 
-  private async loadSubtitle(subtitleUrl: string): Promise<void> {
+  private async loadSubtitle(subtitleUrl: string, auto = false): Promise<void> {
     try {
       const url = subtitleUrl.startsWith('//') ? `https:${subtitleUrl}` : subtitleUrl;
       const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
       if (!res.ok) return;
       const lines = parseSubtitle(await res.json());
-      if (lines.length) this.o.onSubtitle(lines);
+      if (lines.length) this.o.onSubtitle(lines, { auto });
     } catch {
       /* 字幕失败不影响看 */
     }

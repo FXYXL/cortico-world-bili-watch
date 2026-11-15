@@ -16,6 +16,7 @@
 import { DM_SEG, REFERER, USER_AGENT, type BiliClient, numericId } from './client.ts';
 import { BiliError, type Video, type VideoPart } from './types.ts';
 import { decodeDanmakuSegment, DanmakuPool } from './danmaku.ts';
+import { isAutoSubtitle, pickSubtitleTrack } from './subtitle-pick.ts';
 
 /** 从 BV 号 / av 号 / 完整链接里取出编号。**短链接（b23.tv）要用户先在浏览器展开。** */
 export function videoId(input: string): string {
@@ -76,6 +77,14 @@ export interface SubtitleInfo {
   raw?: unknown;
   /** 站点说"要登录才给字幕" —— 这和"这视频没有字幕"是两回事。 */
   needsLogin?: boolean;
+  /**
+   * 这条轨是**站点自动识别**出来的（AI 字幕），不是作者写的。
+   *
+   * 必须标出来：AI 字幕对普通话访谈够用，但**方言、歌曲、专业词会整段歪**
+   * （实测：粤语歌被按普通话转成「欢迎翻到千里年的广东」「因你觉低我自己」）。
+   * 不标的话模型会把它当原话引用，主人一看就知道在瞎编。
+   */
+  auto?: boolean;
 }
 
 /**
@@ -312,8 +321,8 @@ export async function getSubtitles(
     };
   }
 
-  // 优先中文；没有就第一轨
-  const selected = tracks.find((s) => /^zh/i.test(String(s.lan))) ?? tracks[0];
+  // 选轨顺序只定义在 core/subtitle-pick.ts 一处（人工中文 → 人工 → AI 中文 → AI）。
+  const selected = pickSubtitleTrack(tracks) ?? tracks[0];
   const raw = await client.assetJson(String(selected.subtitle_url ?? ''), signal);
   const body: any[] = Array.isArray(raw?.body) ? raw.body : [];
   const segments: SubtitleSegment[] = body
@@ -329,6 +338,7 @@ export async function getSubtitles(
     available: true,
     lang: String(selected.lan ?? ''),
     langDoc: String(selected.lan_doc ?? ''),
+    auto: isAutoSubtitle(selected),
     segments,
     raw,
   };

@@ -135,6 +135,13 @@ export class CoWatch {
   private info: VideoInfo | null = null;
   private subtitle: SubtitleLine[] = [];
   private subtitleLabel = '';
+  /**
+   * 当前这份字幕是**站点自动识别**的（AI 字幕）。
+   *
+   * 人工字幕永远优先：`onSubtitle` 拿到 AI 字幕时，如果手上已经有人工轨就**不覆盖**
+   * （以前浏览器层会直接 `this.subtitle = lines`，把 world 灌进来的人工轨冲掉）。
+   */
+  private subtitleAuto = false;
   private readonly danmaku = new DanmakuPool();
 
   private captureTimer: ReturnType<typeof setInterval> | null = null;
@@ -186,8 +193,13 @@ export class CoWatch {
       onDanmaku: (list) => {
         this.danmaku.add(list);
       },
-      onSubtitle: (lines) => {
-        this.subtitle = lines;
+      onSubtitle: (lines, meta) => {
+        // 人工轨已经在手就不接受 AI 轨（浏览器层拿的是播放器当前选中的那条，
+        // 可能是 AI；反过来 AI 先到、人工后到则让人工覆盖 —— 那是升级）。
+        if (meta?.auto && this.subtitle.length && !this.subtitleAuto) return;
+        this.subtitle = [...lines];
+        this.subtitleAuto = Boolean(meta?.auto);
+        if (this.subtitleAuto) this.subtitleLabel = this.subtitleLabel || 'AI 自动识别';
       },
       onLost: () => {
         if (this.state !== 'off') {
@@ -345,7 +357,7 @@ export class CoWatch {
       playback: null,
       danmaku: this.danmaku.size,
       subtitle: this.subtitle.length,
-      subtitleLabel: this.subtitleLabel,
+      subtitleLabel: this.subtitleAuto ? `${this.subtitleLabel || '字幕'}（AI 自动识别）` : this.subtitleLabel,
       scenes: this.scenes,
       lastFrameAt: this.lastFrameAt,
       framesToday: this.framesToday,
@@ -368,9 +380,12 @@ export class CoWatch {
     this.state = 'off';
   }
 
-  setSubtitles(lines: SubtitleLine[], label: string): void {
+  setSubtitles(lines: SubtitleLine[], label: string, auto = false): void {
+    // 人工轨不该被后来的 AI 轨覆盖
+    if (auto && this.subtitle.length && !this.subtitleAuto) return;
     this.subtitle = lines;
     this.subtitleLabel = label;
+    this.subtitleAuto = auto;
   }
 
   /* ------------------------------------------------------------ 观察 */
@@ -688,6 +703,13 @@ export class CoWatch {
         .filter(Boolean),
       danmaku: this.danmaku.size ? this.danmaku.between(span.from, span.to).length : null,
     }));
+    if (this.subtitleAuto) {
+      // 必须说清：不标的话模型会把粤语歌的机器转写当原话引用，主人一眼看出在瞎编
+      lines.push(
+        '字幕来源：**B站自动识别（AI）**，不是 UP 写的。方言/歌曲/专业词常大幅失真 —— ' +
+          '只当猜主题用，别当台词原话引用；要引用就说"字幕识别得不太准"。',
+      );
+    }
     const board = renderStoryboard(cells, { fmt: clock, subtitleData: this.subtitle.length > 0 });
     if (board) lines.push(board);
     const dm = this.danmaku.between(t0, t1);

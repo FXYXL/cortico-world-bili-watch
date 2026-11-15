@@ -2706,6 +2706,7 @@ export class BiliWatchWorld implements World {
         this.coWatch.setSubtitles(
           sub.segments.map((s) => ({ from: s.from, to: s.to, content: s.text })),
           sub.langDoc,
+          Boolean(sub.auto),
         );
       }
     } catch {
