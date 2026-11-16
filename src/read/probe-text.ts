@@ -77,7 +77,7 @@ export function formatBiliProbe(f: ProbeFacts): string {
     );
     lines.push(
       'subtitles_hint: if the video has **burned-in** subtitles (text baked into the picture), read those from the ' +
-        'frames instead — they are the author's own words and stay legible at cell size. Trust the picture over these lines.',
+        "frames instead — they are the author's own words and stay legible at cell size. Trust the picture over these lines.",
     );
   }
 

@@ -3,6 +3,27 @@
 桌宠的市场按本文件的 `## <版本号>` 分段显示更新说明，
 标题里的版本号必须和 `package.json` 的 `version` 一致。
 
+## 0.2.17
+
+**修 0.2.16 的致命笔误**：`src/read/probe-text.ts` 里一处提示文案写成了
+`the author's own words`（单引号提前闭合），导致**整个 World 加载失败**：
+
+```
+导入失败: Transform failed with 1 error: … Expected ")" but found "s"
+读配置失败: 没有这个 provider: world:bili-watch
+```
+
+0.2.16 是坏的，请直接用这版。
+
+**为什么没被拦住**：`scripts/check-syntax.mjs` 原来只做括号平衡，而引号写错时
+括号数**完全平衡**，看不出来。现在加了一遍**真解析**（用 tsx 自带的 esbuild，
+支持 TS 全部语法）——解析不过直接 exit 1，并打出 `文件:行:列`。
+
+```
+$ node scripts/check-syntax.mjs
+所有源文件解析通过（88 个）
+```
+
 ## 0.2.16
 
 **AI 字幕不再被当成作者原话**（起因：粤语老歌 MV 的「欢迎翻到千里年的广东」）。
