@@ -360,6 +360,64 @@ export function readabilityAdvice(plan) {
  * @param {object} result runStoryboard 的返回值
  * @param {{detail?: 'low'|'med'|'high', maxChars?: number, cellRange?: number[]|null}} [o]
  */
+/**
+ * 把「给调参用的诊断」压成一行。
+ *
+ * `plan:` 那一行原本有 12 个字段（tiers 明细、cutThreshold、motion、adjusted…），
+ * 加上 `badges:`、`cost:`、`footer strip` 图例，实测**占整条回执的 52%**（1773/3394 字符）。
+ * 这些只在"出问题、要调参"时才有用；正常读片时她只需要知道：给了几格、格子多大、
+ * 画面切得快不快。
+ *
+ * 保留不动的东西：
+ *   - `!!` 可读性告警（格子小到看不清时**必须**说，那条是可执行的建议）
+ *   - `segment` 进度、`wide pass` 提醒、`untrusted transcript` 警告
+ *   - 每个 cell 的时间/台词（这才是内容）
+ */
+export function compactBoardMeta(text) {
+  const out = [];
+  let badge = '';
+  for (const line of String(text ?? '').split('\n')) {
+    if (line.startsWith('badges: ')) {
+      const m = line.match(/^badges: (\d+) of (\d+)/);
+      if (m) badge = ` · ${m[1]}/${m[2]} 格是积分采样点（图上无编号）`;
+      continue;
+    }
+    if (line.startsWith('plan: ')) {
+      const strategy = (line.match(/strategy=([\w-]+)/) || [])[1];
+      const frames = line.match(/(\d+) frames on (\d+) image/);
+      const cell = (line.match(/cell>=\s*([\dx]+)/i) || [])[1];
+      const lufs = (line.match(/meanLufs=(-?[\d.]+)/) || [])[1];
+      const cuts = (line.match(/\bcuts=(\d+)/) || [])[1];
+      out.push(
+        strategy && frames
+          ? `plan: ${strategy} · ${frames[1]}格/${frames[2]}张 · cell≥${cell ?? '?'} · lufs ${lufs ?? '?'} · cuts ${cuts ?? '?'}${badge}`
+          : line + badge,
+      );
+      continue;
+    }
+    if (line.startsWith('cost: ')) {
+      const m = line.match(/(~?\d+)\s*vision tokens/i);
+      out.push(m ? `cost: ${m[1]} vision tokens` : line);
+      continue;
+    }
+    // <storyboard> 开标签里有三样纯属环境信息：本机绝对路径（她看不到那个盘）、
+    // ffmpeg 版本（排障时才要）、footer 高度（图里已经有了）。每次调用都重发一遍没意义。
+    if (line.startsWith('<storyboard ')) {
+      out.push(
+        line
+          .replace(/\spath="[^"]*"/, '')
+          .replace(/\sffmpeg="[^"]*"/, '')
+          .replace(/\sfooter="[^"]*"/, ''),
+      );
+      continue;
+    }
+    // 音频条图例：看一次就懂，不必每次都说
+    if (line.startsWith('footer strip shares the timeline')) continue;
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
 export function formatForDetail(result, { detail = 'med', maxChars, cellRange = null } = {}) {
   return formatManifest(result, {
     cellRange,
@@ -789,6 +847,6 @@ export function formatManifest(result, {
   // 那是 CLI 落盘路径的产物（saveStoryboards 会写一个同名 sidecar），
   // 而本包不落盘分镜 —— 留着会让模型去找一个不存在的文件。
   // 每格时间已经在上面逐行列出来了，这一行是纯冗余 + 误导，所以删掉。
-  return lines.join('\n');
+  return compactBoardMeta(lines.join('\n'));
 }
 
