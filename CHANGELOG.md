@@ -3,6 +3,28 @@
 桌宠的市场按本文件的 `## <版本号>` 分段显示更新说明，
 标题里的版本号必须和 `package.json` 的 `version` 一致。
 
+## 0.2.20
+
+**两处「她照着直觉用，工具却报错/啰嗦」的地方**（21:32 真机那一轮暴露的）。
+
+**① `bili_roam` 的 `begin` / `finish` 不带 id 不再报「闲逛记录不存在」**
+
+她常常直接 `bili_search` → `video_probe` → `video_storyboard` 一路看过去，忘了带 roamId。
+以前 `finish` 会抛 `闲逛记录不存在`，看着像插件坏了。现在：
+
+- 没给 id → 自动落到**当前那一轮**（`status().active`），也就是刚收到的机会
+- 一轮都没开 → **不假装成功、也不硬造记录**（会污染轮次与额度），只把话说清楚：
+  「只看看不用 finish；想留档先 begin 再 finish」
+
+**② `bili_roam({ action: "status" })` 瘦身（1917 → 1160 字符，-39%）**
+
+原来把每轮 `summary`（最多 1000 字）和最多 10 条视频全塞进来，光 `recent` 就占 1633 字符。
+状态查询要的只是「今天还剩几次、有没有活跃轮次」：
+
+- `recent` 每轮 summary 截到 80 字（要全文去 `action: "video"` / `history`）
+- 每轮只列最近 3 条视频标题（更早的给 `moreVideos: N`）
+- 面板用的还是原始数据，不受影响
+
 ## 0.2.19
 
 **修 0.2.18 的 `publishReceipt is not defined`**（那一版没发 npm，只是本机装上了）。

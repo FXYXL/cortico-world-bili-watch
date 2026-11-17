@@ -2418,16 +2418,68 @@ export class BiliWatchWorld implements World {
   private async roam(args: Args): Promise<ToolOutcome> {
     const action = String(args.action ?? 'status');
     switch (action) {
-      case 'status':
-        return { text: JSON.stringify(this.roaming.status()) };
+      case 'status': {
+        // recent 里每轮 summary 最多 1000 字、视频最多 10 条 —— 实测 status 回执 1917 字符，
+        // 其中 1633 都在这儿。状态查询要的是「今天还剩几次、现在有没有活跃轮次」，
+        // 细节（哪一条视频、当时写了什么）走 action=video / history。
+        const st = this.roaming.status();
+        const compact = (r: (typeof st.recent)[number]) => ({
+          id: r.id,
+          status: r.status,
+          createdAt: r.createdAt,
+          totalVideos: r.totalVideos ?? r.videos.length,
+          ...(r.summary ? { summary: `${r.summary.slice(0, 80)}${r.summary.length > 80 ? '…' : ''}` } : {}),
+          ...(r.videos.length
+            ? {
+                videos: r.videos.slice(-3).map((v) => v.title?.slice(0, 40) || v.aid),
+                ...(r.videos.length > 3 ? { moreVideos: r.videos.length - 3 } : {}),
+              }
+            : {}),
+        });
+        return {
+          text: JSON.stringify({
+            ...st,
+            ...(st.active ? { active: compact(st.active) } : {}),
+            recent: st.recent.map(compact),
+          }),
+        };
+      }
       case 'begin': {
-        const r = this.roaming.begin(String(args.id ?? ''));
+        // 不给 id 就用"刚收到的那次机会"—— offer 已经把轮次建好了，
+        // 她照抄 begin 不带参是常态，不该因此报「闲逛记录不存在」。
+        const offered = this.roaming.status().active;
+        const asked = String(args.id ?? '').trim();
+        const id = asked || offered?.id || '';
+        if (!id) {
+          return {
+            text:
+              '现在没有待开始的闲逛机会（observe 还没给，或者今天的机会已经用完了）。\n' +
+              '等机会来了再 begin；急着看某条具体视频可以直接 bili_video / bili_comments。',
+            failed: true,
+          };
+        }
+        const r = this.roaming.begin(id);
         this.log(`roam begin ${r.id}`);
         return { text: JSON.stringify(r) };
       }
       case 'finish':
       case 'skip': {
-        const r = this.roaming.finish(String(args.id ?? ''), String(args.summary ?? ''), action === 'skip');
+        // 没给 id 就落到"当前这一轮"：她常常直接 bili_search → video_* 一路看过去，
+        // 忘了带 roamId（真机 21:32 那次就是这么错的，报「闲逛记录不存在」）。
+        const asked = String(args.id ?? '').trim();
+        const id = asked || this.roaming.status().active?.id || '';
+        if (!id) {
+          // 确实一轮都没开：**不假装成功**，也不硬造一条记录（会污染轮次与额度），
+          // 只把话说清楚，让她下次知道该先 begin。
+          return {
+            text:
+              '这次没有正在进行的闲逛轮次（你可能直接搜/看了，没 begin）。\n' +
+              '- 只看看、不打算留档：不用 finish，直接收尾就行。\n' +
+              '- 想记进闲逛记录：先 bili_roam({ action: "begin" })，看完再 finish({ summary })。',
+            failed: true,
+          };
+        }
+        const r = this.roaming.finish(id, String(args.summary ?? ''), action === 'skip');
         if (this.offeredRoamId === r.id) this.offeredRoamId = null;
         this.log(`roam ${action} ${r.id}`);
         return { text: JSON.stringify(r) };
