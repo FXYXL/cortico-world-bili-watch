@@ -3,6 +3,25 @@
 桌宠的市场按本文件的 `## <版本号>` 分段显示更新说明，
 标题里的版本号必须和 `package.json` 的 `version` 一致。
 
+## 0.2.19
+
+**修 0.2.18 的 `publishReceipt is not defined`**（那一版没发 npm，只是本机装上了）。
+
+改回执时我先把 `publishReceipt(result, …)` 写进了 `world.ts`，然后「文件里还没有
+publishReceipt 就加 import」——这个判断被自己刚写的那行代码满足了，**import 永远没加**。
+于是发布评论时：消息其实已经发出去了（B 站那边成功、记录也落库），但回执那一步抛
+ReferenceError，她看到的是工具报错。
+
+- 补上 `import { publishReceipt } from './social/receipt.ts'`
+- **给 `check-syntax.mjs` 加第三道闸**：用 tsc 只抓 **TS2304/2551/2552「找不到名字」**。
+  这类错的特性是**解析通过、括号平衡**，原来的两道闸都看不见，只有真调到那行才炸。
+  其余类型错（宿主包没有类型声明）一律忽略；找不到 typescript 自动跳过、不阻断发布。
+- 括号计数检查降级为「仅供参考」—— 模板字符串和正则一直误报，之前还得靠 `grep -v` 过滤。
+
+验证：`node scripts/check-syntax.mjs` 输出「所有源文件引用的名字都已定义」；
+故意移除那行 import 能准确报 `world.ts:2165:9: Cannot find name 'publishReceipt'`。
+九组回归全过。
+
 ## 0.2.18
 
 **工具回执瘦身**：一轮闲逛的回执从 ~7.2K 字符降到 ~4.2K（-42%，约 -2.4K token），

@@ -1,5 +1,10 @@
 /**
- * scripts/check-syntax.mjs — 只做**花括号/圆括号平衡**的粗检查。
+ * scripts/check-syntax.mjs — 发布前的三道闸门：
+ *
+ *   1. **真解析**（esbuild）：抓字符串引号写错这类「宿主 import 就失败」的语法错。
+ *   2. **未定义名字**（tsc 的 TS2304/2551/2552）：抓「解析通过但运行 ReferenceError」，
+ *      比如写了 `publishReceipt(...)` 忘记 import —— 实测真机上就撞过。
+ *   3. **括号计数**（本文件原本的功能）：只作参考、不阻断，模板字符串和正则会误报。
  *
  * 为什么需要：这套代码里有大量正则（`/\{\\[^}]{1,40}\}/`、`/^[0-9]{1,24}$/`），
  * 朴素地数花括号会把它们当成真实括号，误报不平衡 —— 我第一次就被误报过。
@@ -9,7 +14,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 const ROOT = new URL('../src/', import.meta.url).pathname.replace(/^\//, '');
 
@@ -153,9 +158,79 @@ if (!esbuild) {
   console.log(`所有源文件解析通过（${files.length} 个）。`);
 }
 
+// 括号统计只作参考、不阻断：模板字符串和正则里的 {} () 会被误计
+// （capture.ts / coWatch.ts 一直是误报）。真正的闸门是上面的解析与名字检查。
 if (problems.length) {
-  console.log('括号不平衡：');
+  console.log('（括号计数可疑，仅供参考，通常是模板字符串/正则误报）');
   for (const p of problems) console.log('  ' + p);
-  process.exit(1);
 }
-console.log('所有源文件括号平衡。');
+console.log('检查完毕。');
+
+/* ------------------------------------------------------------- 未定义名字
+ *
+ * 解析通过 ≠ 能跑。实测把 `publishReceipt(result, …)` 写进 world.ts 却忘了加
+ * import：esbuild 解析通过、括号也平衡，宿主一调到那条就 ReferenceError
+ * （她那边看到的是「publishReceipt is not defined」）。这类错只有类型检查能抓。
+ *
+ * 只用 tsc 的 **TS2304「找不到名字」** 这一类（含 2551/2552「你是不是想写…」），
+ * 其余类型错一律忽略 —— 宿主包没有类型声明，全量检查会淹在噪音里。
+ * 找不到 typescript 就跳过，不阻断发布。
+ */
+const TS_CANDIDATES = [
+  'typescript',
+  // Windows 绝对路径动态 import 必须是 file:// URL，直接给盘符会报
+  // "Only URLs with a scheme in: file, data, and node are supported"
+  'file:///D:/AI/tech-blog/node_modules/typescript/lib/typescript.js',
+  'file:///D:/Coopanion/resources/app/node_modules/typescript/lib/typescript.js',
+];
+
+let ts = null;
+for (const spec of TS_CANDIDATES) {
+  try {
+    const mod = await import(spec);
+    ts = mod.default ?? mod;
+    if (typeof ts?.createProgram === 'function') break;
+    ts = null;
+  } catch { /* 下一个候选 */ }
+}
+
+if (!ts) {
+  console.log('（没找到 typescript，跳过「未定义名字」检查）');
+} else {
+  const ID_NAME_CODES = new Set([2304, 2551, 2552]);
+  const program = ts.createProgram(files, {
+    noEmit: true,
+    target: ts.ScriptTarget.ESNext,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    allowImportingTsExtensions: true,
+    skipLibCheck: true,
+    strict: false,
+  });
+  const nameErrors = [];
+  const seen = new Set();
+  // 语法错已由上面的 esbuild 报过，这里只管语义层的「找不到名字」
+  for (const sf of program.getSourceFiles()) {
+    if (sf.fileName.includes('node_modules')) continue;
+    const diags = [
+      ...program.getSemanticDiagnostics(sf),
+      ...program.getDeclarationDiagnostics(sf),
+    ];
+    for (const d of diags) {
+      if (!ID_NAME_CODES.has(d.code)) continue;
+      const key = sf.fileName + ':' + d.start;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const { line, character } = sf.getLineAndCharacterOfPosition(d.start ?? 0);
+      const msg = ts.flattenDiagnosticMessageText(d.messageText, ' ');
+      nameErrors.push(`${relative(ROOT, sf.fileName)}:${line + 1}:${character + 1}: ${msg}`);
+    }
+  }
+  const bad = nameErrors;
+  if (bad.length) {
+    console.log('未定义的名字（解析通过但运行会 ReferenceError）：');
+    for (const p of bad) console.log('  ' + p);
+    process.exit(1);
+  }
+  console.log('所有源文件引用的名字都已定义。');
+}

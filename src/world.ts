@@ -50,6 +50,7 @@ import { judgeParticipation } from './social/judgment.ts';
 import { assessPublicInput, PublicReplySkipped } from './social/safety.ts';
 import { Roaming } from './social/roaming.ts';
 import { Gallery } from './social/gallery.ts';
+import { publishReceipt } from './social/receipt.ts';
 import type { WatchSession } from './social/watchLog.ts';
 import { SocialStore } from './social/store.ts';
 import { loadTranscript } from './read/transcript.ts';
