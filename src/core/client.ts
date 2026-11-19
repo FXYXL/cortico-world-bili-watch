@@ -548,6 +548,9 @@ export class BiliClient {
       if (![1, 11, 17].includes(i.business_id) || !i.source_id || !i.subject_id) continue;
       const parent = numericId(i.source_id);
       const root = i.root_id && String(i.root_id) !== '0' ? numericId(i.root_id) : parent;
+      // `target_id` 是**被回复那条评论**的 id（楼中楼场景下 root 是楼根、不是它）。
+      // 有就用它算「距我那条评论多久」，没有就退回 root / 楼里最后一条自己的评论。
+      const replyTo = i.target_id && String(i.target_id) !== '0' ? numericId(i.target_id) : undefined;
       items.push({
         id: `bilibili:${accountId}:${parent}`,
         accountId,
@@ -558,6 +561,7 @@ export class BiliClient {
         occurredAt: Number(r[lane === 'at' ? 'at_time' : 'reply_time'] ?? 0),
         status: 'pending',
         notificationType: lane === 'at' ? 'mention' : 'reply',
+        ...(replyTo ? { replyToId: replyTo } : {}),
         ...(typeof i.uri === 'string' && /^https:\/\/(www\.)?bilibili\.com\//.test(i.uri)
           ? { url: i.uri }
           : {}),

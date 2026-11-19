@@ -425,24 +425,45 @@ export class BiliService {
   /**
    * 这条通知是不是「回我很久以前那条评论」？是就返回丢弃理由。
    *
-   * 判据：`target.root` 就是**被回复的那条评论**的 rpid（真机 10/10 都在 outbox 里查得到
-   * 发送时间），拿它的 `createdAt` 和通知时间比。
+   * 三种情况要分开找「我那条评论」：
+   *   ① 我发的是顶层评论 → 通知的 `root` 就是它的 rpid（真机 10/10 命中）
+   *   ② 我在别人楼里回复，别人又回我 → `root` 是**楼根**（别人的顶层评论），
+   *      这时用通知里的 `target_id`（被回复的那条）去找
+   *   ③ 拿不到 `target_id` → 退一步：这个楼里**我最近一条**评论的时间
+   *      （偏保守：会用更新的时间，也就是更不容易判成"旧"）
    *
-   * 三个故意放行的分支（宁可多推，也不误杀）：
-   *   - 特别关注 / 主人评论区：root 是主人的评论，不是她的，不该按她的时间判
-   *   - root 为空或 "0"：不知道在回哪一条
-   *   - outbox 里查不到（手工发的、记录被清过）：没有时间就无从判断
+   * 故意放行（宁可多推，也不误杀）：不是"回复"类通知、特别关注、`root` 为空、
+   * outbox 里查不到她的评论、开关关掉或小时数非法。
    */
   private staleReplyReason(item: InboxItem): string | undefined {
     const cfg = this.cfg;
     if (!cfg.posting.dropStaleReplies) return undefined;
     const hours = Number(cfg.posting.staleReplyHours);
     if (!Number.isFinite(hours) || hours <= 0) return undefined;
+    // 只按「有人回复我」判。@ 提到我的、主人评论区的，都不该用这个尺子。
+    if (item.notificationType !== 'reply') return undefined;
     if (item.focusOwnerId) return undefined;
     const root = String(item.target?.root ?? '');
     if (!root || root === '0') return undefined;
-    const mine = this.d.store.outbox().find((r) => String(r.receiptId ?? '') === root);
-    const at = mine?.createdAt ? Date.parse(mine.createdAt) : Number.NaN;
+
+    const sent = this.d.store.outbox().filter((r) => r.status !== 'rejected');
+    const byReceipt = (id: string) => sent.find((r) => String(r.receiptId ?? '') === id);
+
+    // ①② 直接命中：被回复那条就是她发的
+    let mine = (item.replyToId ? byReceipt(String(item.replyToId)) : undefined) ?? byReceipt(root);
+    // ③ 楼中楼兜底：同一视频、同一楼里她自己的评论，取最近一条
+    if (!mine) {
+      const inThread = sent.filter(
+        (r) =>
+          r.target?.oid === item.target.oid &&
+          String(r.target?.root ?? '') === root &&
+          r.createdAt,
+      );
+      mine = inThread.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)).at(-1);
+    }
+    if (!mine) return undefined;
+
+    const at = Date.parse(mine.createdAt);
     if (!Number.isFinite(at)) return undefined;
     const ageH = (item.occurredAt * 1000 - at) / 3_600_000;
     if (!Number.isFinite(ageH) || ageH <= hours) return undefined;

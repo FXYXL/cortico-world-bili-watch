@@ -163,9 +163,76 @@ check('root=0（不知道在回谁）→ 不误杀', delivered.includes('zero-ro
 // 每轮只投 3 条：四条旧的先出队，三个名额全给新的
 check('旧话题不占 3 条名额', delivered.length === 3, `投了 ${delivered.length} 条：${delivered.join(', ')}`);
 
+// —— 楼中楼：她在别人楼里回复，别人再回她（root 是楼根，不是她的评论）——
+const DIR_SUB = `${DIR}-sub`;
+rmSync(DIR_SUB, { recursive: true, force: true });
+mkdirSync(DIR_SUB, { recursive: true });
+
+/** 她在楼里的回复：target.root = 楼根（别人的），receiptId = 她这条 */
+const sub = (rpid: string, root: string, hoursAgo: number) => ({
+  ...mine(rpid, hoursAgo),
+  target: { oid: '117469737916999', type: 1 as const, root, parent: '4000' },
+});
+
+writeFileSync(
+  `${DIR_SUB}/state.json`,
+  JSON.stringify({
+    version: 1,
+    focusBindings: [],
+    focusWorks: [],
+    focusChecks: {},
+    contacts: [],
+    feeds: {},
+    roaming: [],
+    videos: [],
+    comments: [],
+    briefs: [],
+    outbox: [
+      sub('4001', '5001', 30), // 楼 5001：她 30 小时前在楼里回了一条
+      sub('4002', '5002', 1), // 楼 5002：她 1 小时前在楼里回了一条
+      sub('4003', '5003', 30), // 楼 5003：老，但通知不带 target_id，要靠"楼里最近一条"
+    ],
+    inbox: [
+      // ① 有 target_id 指向她的评论（4001，30 小时前）→ 丢
+      item('sub-via-id', '5001', 4, { replyToId: '4001' }),
+      // ② 有 target_id 指向她 1 小时前那条 → 推
+      item('sub-fresh', '5002', 0.2, { replyToId: '4002' }),
+      // ③ 没有 target_id，只能按"同视频+同 root 里她最近一条"（4003，30 小时前）→ 丢
+      item('sub-via-thread', '5003', 4),
+      // ④ root 完全对不上（她没在那楼回过）→ 放行
+      item('sub-unknown', '5999', 4),
+      // ⑤ @ 提到她：不该用"我的评论"这把尺子 → 放行
+      item('sub-mention', '5001', 4, { notificationType: 'mention' }),
+    ],
+  }),
+);
+
+const storeSub = new SocialStore(DIR_SUB);
+const svcSub = new BiliService({
+  cfg: wrap({
+    ...cfg,
+    posting: { ...cfg.posting, dropStaleReplies: true, staleReplyHours: 24 },
+  }),
+  store: storeSub,
+  client: () => client,
+  timezone: 'Asia/Shanghai',
+  secret: () => `SESSDATA=x;bili_jct=y;DedeUserID=${ACC}`,
+});
+const deliveredSub: string[] = [];
+await svcSub.deliver(async (i) => {
+  deliveredSub.push(i.id.split(':').pop()!);
+});
+console.log('楼中楼投递到的:', deliveredSub.join(', ') || '(无)');
+check('楼中楼：target_id 指向旧评论 → 丢', !deliveredSub.includes('sub-via-id'));
+check('楼中楼：target_id 指向新评论 → 推', deliveredSub.includes('sub-fresh'));
+check('楼中楼：没有 target_id，按楼里她最近一条判 → 丢', !deliveredSub.includes('sub-via-thread'));
+check('楼中楼：她没在这楼回过 → 放行', deliveredSub.includes('sub-unknown'));
+check('@ 提到她 → 不用这个尺子', deliveredSub.includes('sub-mention'));
+
 // —— 特别关注：root 是主人评论，不该按"我的评论时间"判 ——
 const DIR3 = `${DIR}-focus`;
 rmSync(DIR3, { recursive: true, force: true });
+rmSync(DIR_SUB, { recursive: true, force: true });
 mkdirSync(DIR3, { recursive: true });
 writeFileSync(
   `${DIR3}/state.json`,

@@ -94,6 +94,13 @@ export interface InboxItem {
   occurredAt: number;
   status: 'pending' | 'handled';
   notificationType: 'reply' | 'mention' | 'focus-video' | 'focus-comment';
+  /**
+   * 被回复的那条评论的 id（B 站通知里的 `target_id`）。
+   *
+   * 为什么需要：`target.root` 是**楼根**，只在"她发的是顶层评论"时等于她的评论；
+   * 她在别人楼里回复时，root 是别人的顶层评论 —— 只看 root 会把这类通知全部漏掉。
+   */
+  replyToId?: string;
   url?: string;
   /** 什么时候该再看（`defer` 用）。 */
   retryAt?: string;
