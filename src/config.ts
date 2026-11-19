@@ -190,6 +190,15 @@ export interface PostingConfig {
   maxDailyComments: number;
   /** 每天最多回多少条通知（**和主动发言分开算**）。 */
   maxDailyReplies: number;
+  /**
+   * 超过 `staleReplyHours` 小时的评论回复**直接丢弃**，不推给她。
+   *
+   * 为什么需要：一条评论挂了两三天，还会陆续有人回；那些话题早凉了，推给她只能是
+   * 「硬接一句」，白占上下文。默认关 —— 不替她决定什么算旧。
+   */
+  dropStaleReplies: boolean;
+  /** 判定「旧」的阈值（小时）。只在 `dropStaleReplies` 开着时生效。 */
+  staleReplyHours: number;
 }
 
 export interface SleepConfig {
@@ -378,6 +387,9 @@ export const BILI_WATCH_DEFAULTS: BiliWatchConfig = {
     minIntervalSec: 60,
     maxDailyComments: 80,
     maxDailyReplies: 80,
+    // 默认关：先让她自己决定要不要按时间丢。
+    dropStaleReplies: false,
+    staleReplyHours: 24,
   },
 
   monitor: { enabled: true, intervalSec: 60 },

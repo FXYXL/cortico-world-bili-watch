@@ -235,6 +235,23 @@ export const BILI_WATCH_CONFIG_GROUP: ConfigGroup = {
         description: '**和主动发言分开算**。普通渠道同一人每天最多 5 条，跨视频累计、重启不重置。',
         'x-hot': true,
       },
+      'worlds.bili-watch.posting.dropStaleReplies': {
+        type: 'boolean',
+        title: '太久的回复就别追了',
+        description:
+          '开了以后，别人回你**几天前**的评论，超过下面那个小时数就直接丢弃（标成跳过，不推给她）。' +
+          '旧话题多半已经凉了，硬接一句反而假。**默认关。**',
+        'x-hot': true,
+      },
+      'worlds.bili-watch.posting.staleReplyHours': {
+        type: 'integer',
+        title: '超过多少小时就不回',
+        minimum: 1,
+        maximum: 336,
+        description:
+          '从**你发那条评论的时间**算起（不是从对方回复算）。比如填 24：昨天的评论今天再被回，就丢弃。' +
+          '只在上面开关打开时生效；找不到你那条评论的时间时一律**不丢**（宁可多推也不误杀）。',
+      },
       'worlds.bili-watch.posting.maxDailyComments': {
         type: 'integer',
         title: '每日最多主动发言',

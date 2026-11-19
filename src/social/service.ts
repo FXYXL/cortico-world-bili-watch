@@ -422,6 +422,36 @@ export class BiliService {
   }
 
   /** 这条通知该不该发、该走哪本账。返 `undefined` = 没限制。 */
+  /**
+   * 这条通知是不是「回我很久以前那条评论」？是就返回丢弃理由。
+   *
+   * 判据：`target.root` 就是**被回复的那条评论**的 rpid（真机 10/10 都在 outbox 里查得到
+   * 发送时间），拿它的 `createdAt` 和通知时间比。
+   *
+   * 三个故意放行的分支（宁可多推，也不误杀）：
+   *   - 特别关注 / 主人评论区：root 是主人的评论，不是她的，不该按她的时间判
+   *   - root 为空或 "0"：不知道在回哪一条
+   *   - outbox 里查不到（手工发的、记录被清过）：没有时间就无从判断
+   */
+  private staleReplyReason(item: InboxItem): string | undefined {
+    const cfg = this.cfg;
+    if (!cfg.posting.dropStaleReplies) return undefined;
+    const hours = Number(cfg.posting.staleReplyHours);
+    if (!Number.isFinite(hours) || hours <= 0) return undefined;
+    if (item.focusOwnerId) return undefined;
+    const root = String(item.target?.root ?? '');
+    if (!root || root === '0') return undefined;
+    const mine = this.d.store.outbox().find((r) => String(r.receiptId ?? '') === root);
+    const at = mine?.createdAt ? Date.parse(mine.createdAt) : Number.NaN;
+    if (!Number.isFinite(at)) return undefined;
+    const ageH = (item.occurredAt * 1000 - at) / 3_600_000;
+    if (!Number.isFinite(ageH) || ageH <= hours) return undefined;
+    return (
+      `距我那条评论已经 ${Math.round(ageH)} 小时（超过设置的 ${hours} 小时），` +
+      '按设置不追旧话题。想改在「社交发言」里调小时数或关掉这个开关。'
+    );
+  }
+
   private notificationLimit(item: InboxItem): string | undefined {
     const cfg = this.cfg;
     if (item.focusOwnerId) {
@@ -568,7 +598,7 @@ export class BiliService {
     if (this.delivering || this.storageLimit()) return;
     this.delivering = true;
     try {
-      const candidates = this.d.store
+      const pool = this.d.store
         .inbox()
         .filter(
           (i) =>
@@ -579,7 +609,23 @@ export class BiliService {
               !i.deliveredAt ||
               Date.parse(i.deliveredAt) < this.deliveryStartedAt ||
               Date.now() - Date.parse(i.deliveredAt) >= 15 * 60_000),
-        )
+        );
+
+      // 旧话题先出队：必须在 slice(0,3) 之前做 —— 否则三条旧通知会占满名额，
+      // 新消息要等到下一轮才推得出去。
+      const stale = new Set<string>();
+      for (const item of pool) {
+        const why = this.staleReplyReason(item);
+        if (!why) continue;
+        stale.add(item.id);
+        this.d.store.updateInbox(item.id, {
+          status: 'handled',
+          handling: { kind: 'skip', reason: why },
+        });
+      }
+
+      const candidates = pool
+        .filter((i) => !stale.has(i.id))
         .sort(
           (a, b) =>
             Number(Boolean(b.focusOwnerId)) - Number(Boolean(a.focusOwnerId)) ||
