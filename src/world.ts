@@ -27,7 +27,7 @@ import type { Language, ToolDef, ToolOutcome, World, WorldHost, WorldWebUiDecl }
 import type { WorldContext } from 'cortico/world.ts';
 import { coerceGroupValues, setByPath } from 'cortico/core/config-schema.ts';
 
-import { BILI_WATCH_DEFAULTS, BILI_WATCH_ID, type BiliWatchConfig } from './config.ts';
+import { mergeConfig, BILI_WATCH_ID, type BiliWatchConfig } from './config.ts';
 import { BILI_WATCH_CONFIG_GROUP } from './config-group.ts';
 import { BILI_WATCH_TOOL_DECLS } from './tools.ts';
 import { BiliClient, cookieField, videoOid } from './core/client.ts';
@@ -318,8 +318,9 @@ export class BiliWatchWorld implements World {
 
   /* ------------------------------------------------------------ 配置与依赖 */
 
+  /** 当前配置 = 默认值 + 宿主存的配置（嵌套组逐键补，见 config.ts 的 mergeConfig）。 */
   private cfg(): BiliWatchConfig {
-    return { ...BILI_WATCH_DEFAULTS, ...this.ctx.cfg };
+    return mergeConfig(this.ctx.cfg);
   }
 
   private secret(name: string): string {

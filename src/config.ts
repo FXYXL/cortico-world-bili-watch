@@ -333,6 +333,38 @@ export interface BiliWatchConfig {
   };
 }
 
+/**
+ * 合并「宿主存的配置」和默认值。
+ *
+ * **嵌套组逐键补**：浅合并（`{ ...DEFAULTS, ...raw }`）在 raw 里有 `posting` 时会把
+ * 默认值整块 `posting` 覆盖掉 —— 新加的嵌套字段（如 `posting.dropStaleReplies`）
+ * 就永远是 undefined，配置页那个框也是空的。这个坑每个新嵌套字段都会踩一次。
+ *
+ * 只做一层：配置里的嵌套组都是一层键值对（posting / sleep / watch / read …），
+ * 深层对象（如阵列）原样返回，不去猜。
+ */
+export function mergeConfig(raw: Partial<BiliWatchConfig> | undefined | null): BiliWatchConfig {
+  const input = (raw ?? {}) as Record<string, unknown>;
+  const merged: Record<string, unknown> = {
+    ...structuredClone(BILI_WATCH_DEFAULTS),
+    ...input,
+  };
+  for (const [key, value] of Object.entries(input)) {
+    const def = (BILI_WATCH_DEFAULTS as Record<string, unknown>)[key];
+    if (
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      def &&
+      typeof def === 'object' &&
+      !Array.isArray(def)
+    ) {
+      merged[key] = { ...structuredClone(def as object), ...(value as object) };
+    }
+  }
+  return merged as unknown as BiliWatchConfig;
+}
+
 export const BILI_WATCH_DEFAULTS: BiliWatchConfig = {
   enabled: true,
   // 登录凭据存在本插件自己的 secret 里

@@ -3,6 +3,33 @@
 桌宠的市场按本文件的 `## <版本号>` 分段显示更新说明，
 标题里的版本号必须和 `package.json` 的 `version` 一致。
 
+## 0.2.22
+
+**修「配置项不显示 / 新字段不生效」两个老坑**（起因：加完旧话题丢弃，配置页里找不到那两项）。
+
+**① 前端产物没重建 → 面板里看不到新字段**
+
+配置页有两个入口：Core 的自动表单（读 `index.ts` 导出的 schema）和 World 自带的设置页
+（读 `dist/webui.js`）。后者是**打包产物**，schema 被内联进去了 —— 只改
+`config-group.ts` 不重新构建，那个面板永远显示旧字段。
+
+- 发布前 `build-webui` 会自动跑（`pnpm publish` 里有），但**本机开发时不会**
+- 以后改 `config-group.ts` / `client.ts`，改完要手动 `node scripts/build-webui.mjs`
+
+**② 配置合并是浅合并 → 新加的嵌套字段永远是 undefined**
+
+`cfg()` 里原来是 `{ ...BILI_WATCH_DEFAULTS, ...ctx.cfg }`。她的存储配置里有 `posting`
+（5 个老键），浅合并会把默认值里整块 `posting` 覆盖掉 —— 新加的
+`posting.dropStaleReplies` / `staleReplyHours` 全是 undefined，配置页那个输入框也是空的。
+
+- 新增 `mergeConfig()`（`config.ts`，纯函数、可离线测）：顶层照常覆盖，**嵌套组逐键补默认值**
+- `world.cfg()` 改用它
+
+这个坑每个新加的嵌套配置都会踩一次，所以一次性解决。
+
+验证：新增 `test/config-merge.mts` 9/9（旧配置补默认值 / 她的值不丢 / 键数对齐 /
+显式值不被盖 / 未知嵌套键保留 / 不污染 DEFAULTS）。其余六组回归全过。
+
 ## 0.2.21
 
 **旧话题不再追**：别人回你很久以前那条评论，超过设定小时数就自动丢弃（配置页可开关）。

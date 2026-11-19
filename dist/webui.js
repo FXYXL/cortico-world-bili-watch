@@ -198,6 +198,19 @@ var BILI_WATCH_CONFIG_GROUP = {
         description: "**\u548C\u4E3B\u52A8\u53D1\u8A00\u5206\u5F00\u7B97**\u3002\u666E\u901A\u6E20\u9053\u540C\u4E00\u4EBA\u6BCF\u5929\u6700\u591A 5 \u6761\uFF0C\u8DE8\u89C6\u9891\u7D2F\u8BA1\u3001\u91CD\u542F\u4E0D\u91CD\u7F6E\u3002",
         "x-hot": true
       },
+      "worlds.bili-watch.posting.dropStaleReplies": {
+        type: "boolean",
+        title: "\u592A\u4E45\u7684\u56DE\u590D\u5C31\u522B\u8FFD\u4E86",
+        description: "\u5F00\u4E86\u4EE5\u540E\uFF0C\u522B\u4EBA\u56DE\u4F60**\u51E0\u5929\u524D**\u7684\u8BC4\u8BBA\uFF0C\u8D85\u8FC7\u4E0B\u9762\u90A3\u4E2A\u5C0F\u65F6\u6570\u5C31\u76F4\u63A5\u4E22\u5F03\uFF08\u6807\u6210\u8DF3\u8FC7\uFF0C\u4E0D\u63A8\u7ED9\u5979\uFF09\u3002\u65E7\u8BDD\u9898\u591A\u534A\u5DF2\u7ECF\u51C9\u4E86\uFF0C\u786C\u63A5\u4E00\u53E5\u53CD\u800C\u5047\u3002**\u9ED8\u8BA4\u5173\u3002**",
+        "x-hot": true
+      },
+      "worlds.bili-watch.posting.staleReplyHours": {
+        type: "integer",
+        title: "\u8D85\u8FC7\u591A\u5C11\u5C0F\u65F6\u5C31\u4E0D\u56DE",
+        minimum: 1,
+        maximum: 336,
+        description: "\u4ECE**\u4F60\u53D1\u90A3\u6761\u8BC4\u8BBA\u7684\u65F6\u95F4**\u7B97\u8D77\uFF08\u4E0D\u662F\u4ECE\u5BF9\u65B9\u56DE\u590D\u7B97\uFF09\u3002\u6BD4\u5982\u586B 24\uFF1A\u6628\u5929\u7684\u8BC4\u8BBA\u4ECA\u5929\u518D\u88AB\u56DE\uFF0C\u5C31\u4E22\u5F03\u3002\u53EA\u5728\u4E0A\u9762\u5F00\u5173\u6253\u5F00\u65F6\u751F\u6548\uFF1B\u627E\u4E0D\u5230\u4F60\u90A3\u6761\u8BC4\u8BBA\u7684\u65F6\u95F4\u65F6\u4E00\u5F8B**\u4E0D\u4E22**\uFF08\u5B81\u53EF\u591A\u63A8\u4E5F\u4E0D\u8BEF\u6740\uFF09\u3002"
+      },
       "worlds.bili-watch.posting.maxDailyComments": {
         type: "integer",
         title: "\u6BCF\u65E5\u6700\u591A\u4E3B\u52A8\u53D1\u8A00",
@@ -729,7 +742,10 @@ var BILI_WATCH_DEFAULTS = {
     transport: "api",
     minIntervalSec: 60,
     maxDailyComments: 80,
-    maxDailyReplies: 80
+    maxDailyReplies: 80,
+    // 默认关：先让她自己决定要不要按时间丢。
+    dropStaleReplies: false,
+    staleReplyHours: 24
   },
   monitor: { enabled: true, intervalSec: 60 },
   // 默认关。开了以后 23:30 到 08:00 不推闲逛机会和评论回复，私信照常。
